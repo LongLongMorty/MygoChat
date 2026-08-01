@@ -1,0 +1,47 @@
+[mainConfig]
+appName = "kama_chat_server"
+host = "127.0.0.1"
+port = 8000
+
+[mysqlConfig]
+host = "127.0.0.1"
+port = 3307
+user = "root"
+password = "root"
+databaseName = "kama_chat_server"
+maxOpenConns = 32
+maxIdleConns = 16
+connMaxLifetimeSeconds = 1800
+
+[redisConfig]
+host = "127.0.0.1"
+port = 6380
+password = ""
+db = 0
+
+[emailConfig]
+host = "smtp.qq.com"
+port = 465
+username = "3635532249@qq.com"
+password = "bsssoaazxgvfdaie"
+from = "3635532249@qq.com"
+
+[logConfig]
+logPath = "./logs/kama_chat.log"
+
+[kafkaConfig]
+messageMode = "hybrid"
+hostPort = "127.0.0.1:9092"
+loginTopic = "login"
+chatTopic = "chat_message"
+logoutTopic = "logout"
+groupID = "chat"
+# Enable only for the local Docker environment. Production topics should be
+# provisioned by deployment tooling and this should be false.
+allowAutoTopicCreation = true
+partition = 0
+timeout = 1
+
+[staticSrcConfig]
+staticAvatarPath = "./static/avatars"
+staticFilePath = "./static/files"

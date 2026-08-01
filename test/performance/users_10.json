@@ -1,0 +1,12 @@
+[
+  {"uuid":"UPERF0001","nickname":"perf-user-1","telephone":"13800000001","password":"test123","token":""},
+  {"uuid":"UPERF0002","nickname":"perf-user-2","telephone":"13800000002","password":"test123","token":""},
+  {"uuid":"UPERF0003","nickname":"perf-user-3","telephone":"13800000003","password":"test123","token":""},
+  {"uuid":"UPERF0004","nickname":"perf-user-4","telephone":"13800000004","password":"test123","token":""},
+  {"uuid":"UPERF0005","nickname":"perf-user-5","telephone":"13800000005","password":"test123","token":""},
+  {"uuid":"UPERF0006","nickname":"perf-user-6","telephone":"13800000006","password":"test123","token":""},
+  {"uuid":"UPERF0007","nickname":"perf-user-7","telephone":"13800000007","password":"test123","token":""},
+  {"uuid":"UPERF0008","nickname":"perf-user-8","telephone":"13800000008","password":"test123","token":""},
+  {"uuid":"UPERF0009","nickname":"perf-user-9","telephone":"13800000009","password":"test123","token":""},
+  {"uuid":"UPERF0010","nickname":"perf-user-10","telephone":"13800000010","password":"test123","token":""}
+]

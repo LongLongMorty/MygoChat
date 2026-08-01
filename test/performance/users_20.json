@@ -1,0 +1,22 @@
+[
+  {"uuid":"UPERF0001","nickname":"perf-user-1","telephone":"13800000001","password":"test123","token":""},
+  {"uuid":"UPERF0002","nickname":"perf-user-2","telephone":"13800000002","password":"test123","token":""},
+  {"uuid":"UPERF0003","nickname":"perf-user-3","telephone":"13800000003","password":"test123","token":""},
+  {"uuid":"UPERF0004","nickname":"perf-user-4","telephone":"13800000004","password":"test123","token":""},
+  {"uuid":"UPERF0005","nickname":"perf-user-5","telephone":"13800000005","password":"test123","token":""},
+  {"uuid":"UPERF0006","nickname":"perf-user-6","telephone":"13800000006","password":"test123","token":""},
+  {"uuid":"UPERF0007","nickname":"perf-user-7","telephone":"13800000007","password":"test123","token":""},
+  {"uuid":"UPERF0008","nickname":"perf-user-8","telephone":"13800000008","password":"test123","token":""},
+  {"uuid":"UPERF0009","nickname":"perf-user-9","telephone":"13800000009","password":"test123","token":""},
+  {"uuid":"UPERF0010","nickname":"perf-user-10","telephone":"13800000010","password":"test123","token":""},
+  {"uuid":"UPERF0011","nickname":"perf-user-11","telephone":"13800000011","password":"test123","token":""},
+  {"uuid":"UPERF0012","nickname":"perf-user-12","telephone":"13800000012","password":"test123","token":""},
+  {"uuid":"UPERF0013","nickname":"perf-user-13","telephone":"13800000013","password":"test123","token":""},
+  {"uuid":"UPERF0014","nickname":"perf-user-14","telephone":"13800000014","password":"test123","token":""},
+  {"uuid":"UPERF0015","nickname":"perf-user-15","telephone":"13800000015","password":"test123","token":""},
+  {"uuid":"UPERF0016","nickname":"perf-user-16","telephone":"13800000016","password":"test123","token":""},
+  {"uuid":"UPERF0017","nickname":"perf-user-17","telephone":"13800000017","password":"test123","token":""},
+  {"uuid":"UPERF0018","nickname":"perf-user-18","telephone":"13800000018","password":"test123","token":""},
+  {"uuid":"UPERF0019","nickname":"perf-user-19","telephone":"13800000019","password":"test123","token":""},
+  {"uuid":"UPERF0020","nickname":"perf-user-20","telephone":"13800000020","password":"test123","token":""}
+]

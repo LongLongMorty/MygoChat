@@ -1,0 +1,12 @@
+[
+  {
+    "uuid": "U_REPLACE_WITH_TEST_USER_1",
+    "nickname": "perf-user-1",
+    "token": "REPLACE_WITH_A_FRESH_JWT"
+  },
+  {
+    "uuid": "U_REPLACE_WITH_TEST_USER_2",
+    "nickname": "perf-user-2",
+    "token": "REPLACE_WITH_A_FRESH_JWT"
+  }
+]
