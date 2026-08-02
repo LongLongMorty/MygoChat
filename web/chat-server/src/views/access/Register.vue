@@ -33,8 +33,8 @@
           <el-input v-model="registerData.nickname" />
         </el-form-item>
         <el-form-item
-          prop="telephone"
-          label="账号"
+          prop="email"
+          label="邮箱"
           :rules="[
             {
               required: true,
@@ -43,7 +43,7 @@
             },
           ]"
         >
-          <el-input v-model="registerData.telephone" />
+          <el-input v-model="registerData.email" />
         </el-form-item>
         <el-form-item
           prop="password"
@@ -59,7 +59,7 @@
           <el-input type="password" v-model="registerData.password" />
         </el-form-item>
         <el-form-item
-          prop="sms_code"
+          prop="email_code"
           label="验证码"
           :rules="[
             {
@@ -69,10 +69,10 @@
             },
           ]"
         >
-          <el-input v-model="registerData.sms_code" style="max-width: 200px">
+          <el-input v-model="registerData.email_code" style="max-width: 200px">
             <template #append>
               <el-button
-                @click="sendSmsCode"
+                @click="sendEmailCode"
                 style="background-color: rgb(229, 132, 132); color: #ffffff"
                 >点击发送</el-button
               >
@@ -86,7 +86,7 @@
         >
       </div>
       <div class="go-login-button-container">
-        <button class="go-sms-login-btn" @click="handleSmsLogin">
+        <button class="go-email-login-btn" @click="handleEmailLogin">
           验证码登录
         </button>
         <button class="go-password-login-btn" @click="handleLogin">
@@ -103,15 +103,16 @@ import axios from "@/api";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { useStore } from "vuex";
+import { checkEmailValid } from "@/assets/js/valid.js";
 export default {
   name: "Register",
   setup() {
     const data = reactive({
       registerData: {
-        telephone: "",
+        email: "",
         password: "",
         nickname: "",
-        sms_code: "",
+        email_code: "",
       },
     });
     const router = useRouter();
@@ -120,9 +121,9 @@ export default {
       try {
         if (
           !data.registerData.nickname ||
-          !data.registerData.telephone ||
+          !data.registerData.email ||
           !data.registerData.password ||
-          !data.registerData.sms_code
+          !data.registerData.email_code
         ) {
           ElMessage.error("请填写完整注册信息。");
           return;
@@ -134,24 +135,22 @@ export default {
           ElMessage.error("昵称长度在 3 到 10 个字符。");
           return;
         }
-        if (!checkTelephoneValid()) {
-          ElMessage.error("请输入有效的手机号码。");
+        if (!checkEmailValid(data.registerData.email)) {
+          ElMessage.error("请输入有效的邮箱地址。");
           return;
         }
         const response = await axios.post(
           store.state.backendUrl + "/register",
           data.registerData
-        ); // 发送POST请求
+        );
         if (response.data.code == 200) {
           ElMessage.success(response.data.message);
           console.log(response.data.message);
-          // 查看avatar前缀有没有http
           if (!response.data.data.avatar.startsWith("http")) {
             response.data.data.avatar =
               store.state.backendUrl + response.data.data.avatar;
           }
           store.commit("setUserInfo", response.data.data);
-          // 准备创建websocket连接
           const wsUrl =
             store.state.wsUrl + "/wss?token=" + response.data.data.token;
           console.log(wsUrl);
@@ -178,37 +177,33 @@ export default {
         console.log(error);
       }
     };
-    const checkTelephoneValid = () => {
-      const regex = /^1[3456789]\d{9}$/;
-      return regex.test(data.registerData.telephone);
-    };
 
     const handleLogin = () => {
       router.push("/login");
     };
 
-    const handleSmsLogin = () => {
-      router.push("/smsLogin");
+    const handleEmailLogin = () => {
+      router.push("/emailLogin");
     };
 
-    const sendSmsCode = async () => {
+    const sendEmailCode = async () => {
       if (
-        !data.registerData.telephone ||
+        !data.registerData.email ||
         !data.registerData.nickname ||
         !data.registerData.password
       ) {
         ElMessage.error("请填写完整注册信息。");
         return;
       }
-      if (!checkTelephoneValid()) {
-        ElMessage.error("请输入有效的手机号码。");
+      if (!checkEmailValid(data.registerData.email)) {
+        ElMessage.error("请输入有效的邮箱地址。");
         return;
       }
       const req = {
-        telephone: data.registerData.telephone,
+        email: data.registerData.email,
       };
       const rsp = await axios.post(
-        store.state.backendUrl + "/user/sendSmsCode",
+        store.state.backendUrl + "/user/sendEmailCode",
         req
       );
       console.log(rsp);
@@ -226,8 +221,8 @@ export default {
       router,
       handleRegister,
       handleLogin,
-      handleSmsLogin,
-      sendSmsCode,
+      handleEmailLogin,
+      sendEmailCode,
     };
   },
 };
@@ -260,8 +255,8 @@ export default {
 
 .register-button-container {
   display: flex;
-  justify-content: center; /* 水平居中 */
-  margin-top: 20px; /* 可选，根据需要调整按钮与输入框之间的间距 */
+  justify-content: center;
+  margin-top: 20px;
   width: 100%;
 }
 
@@ -283,7 +278,7 @@ export default {
   margin-top: 10px;
 }
 
-.go-sms-login-btn,
+.go-email-login-btn,
 .go-password-login-btn {
   background-color: rgba(255, 255, 255, 0);
   border: none;

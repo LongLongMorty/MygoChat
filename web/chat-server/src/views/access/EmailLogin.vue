@@ -6,7 +6,7 @@
         boxShadow: `var(${'--el-box-shadow-dark'})`,
       }"
     >
-      <h2 class="login-item">登录</h2>
+      <h2 class="login-item">验证码登录</h2>
       <el-form
         ref="formRef"
         :model="loginData"
@@ -14,8 +14,8 @@
         class="demo-dynamic"
       >
         <el-form-item
-          prop="telephone"
-          label="账号"
+          prop="email"
+          label="邮箱"
           :rules="[
             {
               required: true,
@@ -24,10 +24,10 @@
             },
           ]"
         >
-          <el-input v-model="loginData.telephone" />
+          <el-input v-model="loginData.email" />
         </el-form-item>
         <el-form-item
-          prop="sms_code"
+          prop="email_code"
           label="验证码"
           :rules="[
             {
@@ -37,10 +37,10 @@
             },
           ]"
         >
-          <el-input v-model="loginData.sms_code" style="max-width: 200px">
+          <el-input v-model="loginData.email_code" style="max-width: 200px">
             <template #append>
               <el-button
-                @click="sendSmsCode"
+                @click="sendEmailCode"
                 style="background-color: rgb(229, 132, 132); color: #ffffff"
                 >点击发送</el-button
               >
@@ -49,14 +49,14 @@
         </el-form-item>
       </el-form>
       <div class="login-button-container">
-        <el-button type="primary" class="login-btn" @click="handleSmsLogin"
+        <el-button type="primary" class="login-btn" @click="handleEmailLogin"
           >登录</el-button
         >
       </div>
 
       <div class="go-register-button-container">
         <button class="go-register-btn" @click="handleRegister">注册</button>
-        <button class="go-sms-btn" @click="handleLogin">密码登录</button>
+        <button class="go-password-btn" @click="handleLogin">密码登录</button>
       </div>
     </div>
   </div>
@@ -68,29 +68,30 @@ import axios from "@/api";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { useStore } from "vuex";
+import { checkEmailValid } from "@/assets/js/valid.js";
 export default {
-  name: "smsLogin",
+  name: "EmailLogin",
   setup() {
     const data = reactive({
       loginData: {
-        telephone: "",
-        sms_code: "",
+        email: "",
+        email_code: "",
       },
     });
     const router = useRouter();
     const store = useStore();
-    const handleSmsLogin = async () => {
+    const handleEmailLogin = async () => {
       try {
-        if (!data.loginData.telephone || !data.loginData.sms_code) {
+        if (!data.loginData.email || !data.loginData.email_code) {
           ElMessage.error("请填写完整登录信息。");
           return;
         }
-        if (!checkTelephoneValid()) {
-          ElMessage.error("请输入有效的手机号码。");
+        if (!checkEmailValid(data.loginData.email)) {
+          ElMessage.error("请输入有效的邮箱地址。");
           return;
         }
         const response = await axios.post(
-          store.state.backendUrl + "/user/smsLogin",
+          store.state.backendUrl + "/user/emailLogin",
           data.loginData
         );
         console.log(response);
@@ -106,7 +107,6 @@ export default {
                 store.state.backendUrl + response.data.data.avatar;
             }
             store.commit("setUserInfo", response.data.data);
-            // 准备创建websocket连接
             const wsUrl =
               store.state.wsUrl + "/wss?token=" + response.data.data.token;
             console.log(wsUrl);
@@ -134,31 +134,27 @@ export default {
         ElMessage.error(error);
       }
     };
-    const checkTelephoneValid = () => {
-      const regex = /^1[3456789]\d{9}$/;
-      return regex.test(data.loginData.telephone);
-    };
     const handleRegister = () => {
       router.push("/register");
     };
     const handleLogin = () => {
       router.push("/login");
     };
-    const sendSmsCode = async () => {
-      if (!data.loginData.telephone) {
-        ElMessage.error("请输入手机号码。");
+    const sendEmailCode = async () => {
+      if (!data.loginData.email) {
+        ElMessage.error("请输入邮箱地址。");
         return;
       }
-      if (!checkTelephoneValid()) {
-        ElMessage.error("请输入有效的手机号码。");
+      if (!checkEmailValid(data.loginData.email)) {
+        ElMessage.error("请输入有效的邮箱地址。");
         return;
       }
       try {
         const req = {
-          telephone: data.loginData.telephone,
+          email: data.loginData.email,
         };
         const rsp = await axios.post(
-          store.state.backendUrl + "/user/sendSmsCode",
+          store.state.backendUrl + "/user/sendEmailCode",
           req
         );
         console.log(rsp);
@@ -177,10 +173,10 @@ export default {
     return {
       ...toRefs(data),
       router,
-      handleSmsLogin,
+      handleEmailLogin,
       handleLogin,
       handleRegister,
-      sendSmsCode,
+      sendEmailCode,
     };
   },
 };
@@ -203,7 +199,6 @@ export default {
   transform: translate(-50%, -50%);
   padding: 30px 50px;
   border-radius: 20px;
-  /*opacity: 0.7;*/
 }
 
 .login-item {
@@ -214,8 +209,8 @@ export default {
 
 .login-button-container {
   display: flex;
-  justify-content: center; /* 水平居中 */
-  margin-top: 20px; /* 可选，根据需要调整按钮与输入框之间的间距 */
+  justify-content: center;
+  margin-top: 20px;
   width: 100%;
 }
 
@@ -234,7 +229,7 @@ export default {
 }
 
 .go-register-btn,
-.go-sms-btn {
+.go-password-btn {
   background-color: rgba(255, 255, 255, 0);
   border: none;
   cursor: pointer;
