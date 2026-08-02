@@ -20,6 +20,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"gorm.io/plugin/soft_delete"
 )
 
 type userInfoService struct {
@@ -217,6 +219,11 @@ func (u *userInfoService) Register(registerReq request.RegisterRequest) (string,
 
 	res := dao.GormDB.Create(&newUser)
 	if res.Error != nil {
+		// MySQL 1062: Duplicate entry — 并发注册兜底，Service 层 checkEmailExist 已拦截非删除行
+		if strings.Contains(res.Error.Error(), "1062") || strings.Contains(res.Error.Error(), "Duplicate entry") {
+			zlog.Info("并发注册冲突: " + email + " 已存在")
+			return "该邮箱已经存在，注册失败", nil, -2
+		}
 		zlog.Error(res.Error.Error())
 		return constants.SYSTEM_ERROR, nil, -1
 	}
@@ -298,7 +305,7 @@ func (u *userInfoService) GetUserInfoList(ownerId string) (string, []respond.Get
 			Status:    user.Status,
 			IsAdmin:   user.IsAdmin,
 		}
-		if user.DeletedAt.Valid {
+		if user.DeletedAt != 0 {
 			rp.IsDeleted = true
 		} else {
 			rp.IsDeleted = false
@@ -376,8 +383,7 @@ func (u *userInfoService) DeleteUsers(uuidList []string) (string, int) {
 		return constants.SYSTEM_ERROR, -1
 	}
 	for _, user := range users {
-		user.DeletedAt.Valid = true
-		user.DeletedAt.Time = time.Now()
+		user.DeletedAt = soft_delete.DeletedAt(time.Now().UnixNano())
 		if res := dao.GormDB.Save(&user); res.Error != nil {
 			zlog.Error(res.Error.Error())
 			return constants.SYSTEM_ERROR, -1

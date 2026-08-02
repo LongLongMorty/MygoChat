@@ -93,6 +93,7 @@ HybridRouter
 - 邮箱验证码登录
 - JWT 鉴权（HS256，24h 有效期）
 - 管理员 / 普通用户权限体系
+- **邮箱唯一性**：`(email, deleted_at)` 复合唯一索引 + 0-based 软删除（`soft_delete` 插件），活跃邮箱在 DB 层硬性唯一（1062 兜底），软删后邮箱可重新注册
 
 ### 联系人 & 群组
 - 添加 / 删除联系人
@@ -112,7 +113,7 @@ HybridRouter
 | 语言 | Go 1.25 |
 | Web 框架 | Gin + gorilla/websocket |
 | 消息队列 | Apache Kafka 3.7（segmentio/kafka-go） |
-| 数据库 | MySQL 8.0 + GORM |
+| 数据库 | MySQL 8.0 + GORM（`gorm.io/plugin/soft_delete` 软删除） |
 | 缓存 | Redis 7 |
 | 认证 | JWT (HS256) + bcrypt |
 | 邮件 | SMTP (SSL 465 / STARTTLS 587) |
