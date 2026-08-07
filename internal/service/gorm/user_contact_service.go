@@ -388,8 +388,18 @@ func (u *userContactService) GetNewContactList(ownerId string) (string, []respon
 }
 
 // GetAddGroupList 获取新的加群列表
-// 前端已经判断调用接口的用户是群主，也只有群主才能调用这个接口
-func (u *userContactService) GetAddGroupList(groupId string) (string, []respond.AddGroupListRespond, int) {
+// 安全修复：校验调用者为该群群主（原实现依赖前端判断，任意登录用户可拉取任意群待审批列表）
+func (u *userContactService) GetAddGroupList(ownerId, groupId string) (string, []respond.AddGroupListRespond, int) {
+	// 校验群主权限
+	var group model.GroupInfo
+	if res := dao.GormDB.First(&group, "uuid = ?", groupId); res.Error != nil {
+		zlog.Error(res.Error.Error())
+		return constants.SYSTEM_ERROR, nil, -1
+	}
+	if group.OwnerId != ownerId {
+		return "无权查看该群的加群申请", nil, -2
+	}
+
 	var contactApplyList []model.ContactApply
 	if res := dao.GormDB.Where("contact_id = ? AND status = ?", groupId, contact_apply_status_enum.PENDING).Find(&contactApplyList); res.Error != nil {
 		if errors.Is(res.Error, gorm.ErrRecordNotFound) {

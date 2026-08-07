@@ -172,7 +172,7 @@ func GetAddGroupList(c *gin.Context) {
 		})
 		return
 	}
-	message, data, ret := gorm.UserContactService.GetAddGroupList(req.GroupId)
+	message, data, ret := gorm.UserContactService.GetAddGroupList(c.GetString("uuid"), req.GroupId)
 	JsonBack(c, message, ret, data)
 }
 

@@ -16,8 +16,13 @@ func init() {
 	GE = gin.Default()
 
 	// CORS 配置
+	// 安全修复：白名单替代通配符 *，仅允许本地开发前端来源；生产环境需替换为真实前端域名
 	corsConfig := cors.DefaultConfig()
-	corsConfig.AllowOrigins = []string{"*"} // TODO: 生产环境改为白名单
+	corsConfig.AllowOrigins = []string{
+		"https://localhost:8080",
+		"https://127.0.0.1:8080",
+		"https://192.168.10.146:8080",
+	}
 	corsConfig.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
 	corsConfig.AllowHeaders = []string{"Origin", "Content-Length", "Content-Type", "Authorization"}
 	GE.Use(cors.New(corsConfig))
