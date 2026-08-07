@@ -126,9 +126,10 @@ func (s *sessionService) CheckOpenSessionAllowed(sendId, receiveId string) (stri
 
 // DeleteSession 删除会话
 
-// OpenSession 打开会话
+// OpenSession 打开会话（缓存：精确 key session_<send>_<receive>，TTL 1 分钟）
 func (s *sessionService) OpenSession(req request.OpenSessionRequest) (string, string, int) {
-	rspString, err := myredis.GetKeyWithPrefixNilIsErr("session_" + req.SendId + "_" + req.ReceiveId)
+	cacheKey := "session_" + req.SendId + "_" + req.ReceiveId
+	rspString, err := myredis.GetKeyNilIsErr(cacheKey)
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			var session model.Session
@@ -141,14 +142,16 @@ func (s *sessionService) OpenSession(req request.OpenSessionRequest) (string, st
 					}
 					return s.CreateSession(createReq)
 				}
+				zlog.Error(res.Error.Error())
+				return constants.SYSTEM_ERROR, "", -1
 			}
-			//rspString, err := json.Marshal(session)
-			//if err != nil {
-			//	zlog.Error(err.Error())
-			//}
-			//if err := myredis.SetKeyEx("session_"+req.SendId+"_"+req.ReceiveId+"_"+session.Uuid, string(rspString), time.Minute*constants.REDIS_TIMEOUT); err != nil {
-			//	zlog.Error(err.Error())
-			//}
+			// 写缓存：会话 JSON
+			rspByte, marshalErr := json.Marshal(session)
+			if marshalErr != nil {
+				zlog.Error(marshalErr.Error())
+			} else if setErr := myredis.SetKeyEx(cacheKey, string(rspByte), time.Minute*constants.REDIS_TIMEOUT); setErr != nil {
+				zlog.Error(setErr.Error())
+			}
 			return "会话创建成功", session.Uuid, 0
 		} else {
 			zlog.Error(err.Error())
@@ -268,9 +271,10 @@ func (s *sessionService) DeleteSession(ownerId, sessionId string) (string, int) 
 		zlog.Error(res.Error.Error())
 		return constants.SYSTEM_ERROR, -1
 	}
-	//if err := myredis.DelKeysWithSuffix(sessionId); err != nil {
-	//	zlog.Error(err.Error())
-	//}
+	// 失效会话详情缓存（精确 key session_<send>_<receive>）
+	if err := myredis.DelKeyIfExists("session_" + session.SendId + "_" + session.ReceiveId); err != nil {
+		zlog.Error(err.Error())
+	}
 	if err := myredis.DelKeysWithPattern("group_session_list_" + ownerId); err != nil {
 		zlog.Error(err.Error())
 	}

@@ -498,6 +498,10 @@ func updateSessionLastMessage(sendId, receiveId string, message model.Message) {
 		}); res.Error != nil {
 		zlog.Error("更新 session 最近消息失败: " + res.Error.Error())
 	}
+	// 失效 OpenSession 详情缓存（摘要已变，缓存不可复用）
+	if err := myredis.DelKeyIfExists("session_" + sendId + "_" + receiveId); err != nil {
+		zlog.Error(err.Error())
+	}
 }
 
 // lookupReceiveInfo 查询接收方名称和头像（U=用户，G=群）
