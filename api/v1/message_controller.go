@@ -84,11 +84,14 @@ func GetGroupMessageList(c *gin.Context) {
 	currentUuid := c.GetString("uuid")
 
 	// P0: 校验当前用户是否是该群的有效成员
-	// P1 修复：加 contact_type=1, status=0 (NORMAL), 拉黑/退出/被踢不能读
-	var contact model.UserContact
-	res := dao.GormDB.Where("user_id = ? AND contact_id = ? AND contact_type = 1 AND status = 0 AND deleted_at IS NULL",
-		currentUuid, req.GroupId).First(&contact)
-	if res.Error != nil {
+	// 修复：改用 group_member 权威表（status=正常 且未删除），
+	// 原实现查 user_contact，被踢/退群成员可能因两表不同步仍通过校验
+	var memberCount int64
+	memberRes := dao.GormDB.Table("group_member").
+		Where("group_id = ? AND user_id = ? AND status = 0 AND deleted_at = 0",
+			req.GroupId, currentUuid).
+		Count(&memberCount)
+	if memberRes.Error != nil || memberCount == 0 {
 		zlog.Error("非群成员尝试查看群聊记录: " + currentUuid + " -> " + req.GroupId)
 		c.JSON(http.StatusOK, gin.H{
 			"code":    403,

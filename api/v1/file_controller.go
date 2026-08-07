@@ -74,16 +74,17 @@ func DownloadFile(c *gin.Context) {
 		return
 	}
 
-	// 授权检查：群成员可下载（receive_id 以 G 开头时，查 group_member 表）
-	// 查找包含此文件的群消息
+	// 授权检查：群成员可下载（receive_id 以 G 开头时，查 group_member 权威表）
+	// 修复：原实现查 user_contact 且只看 deleted_at，被踢/退群成员可能仍通过校验；
+	// group_member 是成员身份的权威数据（status=正常 且未删除）
 	var groupMsg model.Message
 	groupResult := dao.GormDB.Where("url LIKE ? AND receive_id LIKE 'G%'",
 		"%"+filename+"%").First(&groupMsg)
 	if groupResult.Error == nil {
-		// 检查 requester 是否是该群的成员
+		// 检查 requester 是否是该群的有效成员（group_member 表）
 		var count int64
-		dao.GormDB.Table("user_contact").Where("user_id = ? AND contact_id = ? AND deleted_at IS NULL",
-			requesterUuid, groupMsg.ReceiveId).Count(&count)
+		dao.GormDB.Table("group_member").Where("group_id = ? AND user_id = ? AND status = 0 AND deleted_at = 0",
+			groupMsg.ReceiveId, requesterUuid).Count(&count)
 		if count > 0 {
 			serveFile(c, filename, requesterUuid)
 			return
