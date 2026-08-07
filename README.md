@@ -100,6 +100,7 @@ HybridRouter
 - 拉黑 / 取消拉黑
 - 创建 / 加入 / 退出群聊
 - 群成员管理
+- **好友关系唯一性**：`(user_id, contact_id)` 复合唯一索引 + 幂等恢复（重复通过申请不产生重复记录；删好友后重加恢复原记录）
 - **群成员关系表**：成员拆分为独立 `group_member` 表（`role` 角色 / `status` 成员状态 / `mute_until` 禁言 / `joined_at` 入群时间），`(group_id, user_id, deleted_at)` 复合唯一索引防重复入群，退群/被踢软删除后重进群幂等恢复
 - **群 uuid 唯一性**：`(uuid, deleted_at)` 复合唯一索引 + 0-based 软删除（与用户邮箱同一套机制），活跃群 uuid 在 DB 层硬性唯一（1062 兜底），解散/删除后同 uuid 可重建
 

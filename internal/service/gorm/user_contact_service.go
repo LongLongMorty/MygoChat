@@ -424,6 +424,58 @@ func (u *userContactService) GetAddGroupList(groupId string) (string, []respond.
 	return "获取成功", rsp, 0
 }
 
+// restoreOrCreateContact 幂等建立联系人关系：已存在活跃记录则更新状态，无活跃但有软删历史则恢复最新一条，否则插入
+// 配合 (user_id, contact_id) 唯一索引防止重复关系；恢复历史记录时只恢复最新一条，避免与现存活跃记录冲突
+func restoreOrCreateContact(tx *gorm.DB, userId, contactId string, contactType int8, now time.Time) error {
+	// 1. 已存在活跃记录（deleted_at IS NULL）→ 直接更新状态
+	var active int64
+	if res := tx.Model(&model.UserContact{}).
+		Where("user_id = ? AND contact_id = ?", userId, contactId).
+		Count(&active); res.Error != nil {
+		return res.Error
+	}
+	if active > 0 {
+		if res := tx.Model(&model.UserContact{}).
+			Where("user_id = ? AND contact_id = ?", userId, contactId).
+			Updates(map[string]interface{}{
+				"status":    contact_status_enum.NORMAL,
+				"update_at": now,
+			}); res.Error != nil {
+			return res.Error
+		}
+		return nil
+	}
+	// 2. 无活跃记录，但有历史记录（软删过）→ 恢复最新一条
+	var history model.UserContact
+	if res := tx.Unscoped().Model(&model.UserContact{}).
+		Where("user_id = ? AND contact_id = ? AND deleted_at IS NOT NULL", userId, contactId).
+		Order("id DESC").First(&history); res.Error == nil {
+		if res := tx.Unscoped().Model(&model.UserContact{}).
+			Where("id = ?", history.Id).
+			Updates(map[string]interface{}{
+				"deleted_at": nil,
+				"status":     contact_status_enum.NORMAL,
+				"update_at":  now,
+			}); res.Error != nil {
+			return res.Error
+		}
+		return nil
+	}
+	// 3. 全新关系 → 插入
+	newContact := model.UserContact{
+		UserId:      userId,
+		ContactId:   contactId,
+		ContactType: contactType,
+		Status:      contact_status_enum.NORMAL,
+		CreatedAt:   now,
+		UpdateAt:    now,
+	}
+	if res := tx.Create(&newContact); res.Error != nil {
+		return res.Error
+	}
+	return nil
+}
+
 // PassContactApply 通过联系人申请
 func (u *userContactService) PassContactApply(ownerId string, contactId string) (string, int) {
 	var contactApply model.ContactApply
@@ -442,36 +494,33 @@ func (u *userContactService) PassContactApply(ownerId string, contactId string) 
 			zlog.Error("用户已被禁用")
 			return "用户已被禁用", -2
 		}
-		contactApply.Status = contact_apply_status_enum.AGREE
-		if res := dao.GormDB.Save(&contactApply); res.Error != nil {
-			zlog.Error(res.Error.Error())
-			return constants.SYSTEM_ERROR, -1
-		}
-		newContact := model.UserContact{
-			UserId:      ownerId,
-			ContactId:   contactId,
-			ContactType: contact_type_enum.USER,
-			Status:      contact_status_enum.NORMAL,
-			CreatedAt:   time.Now(),
-			UpdateAt:    time.Now(),
-		}
-		if res := dao.GormDB.Create(&newContact); res.Error != nil {
-			zlog.Error(res.Error.Error())
-			return constants.SYSTEM_ERROR, -1
-		}
-		anotherContact := model.UserContact{
-			UserId:      contactId,
-			ContactId:   ownerId,
-			ContactType: contact_type_enum.USER,
-			Status:      contact_status_enum.NORMAL,
-			CreatedAt:   newContact.CreatedAt,
-			UpdateAt:    newContact.UpdateAt,
-		}
-		if res := dao.GormDB.Create(&anotherContact); res.Error != nil {
-			zlog.Error(res.Error.Error())
+		// 事务：更新申请状态 → 成对幂等建立双向好友关系 → 清理缓存
+		err := dao.GormDB.Transaction(func(tx *gorm.DB) error {
+			// 1. 更新申请状态
+			if res := tx.Model(&contactApply).Update("status", contact_apply_status_enum.AGREE); res.Error != nil {
+				return res.Error
+			}
+			// 2. 成对幂等建立双向好友关系（已存在则恢复，不存在则插入）
+			now := time.Now()
+			pairs := []struct{ uid, cid string }{
+				{ownerId, contactId},
+				{contactId, ownerId},
+			}
+			for _, p := range pairs {
+				if err := restoreOrCreateContact(tx, p.uid, p.cid, contact_type_enum.USER, now); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			zlog.Error("通过好友申请事务失败: " + err.Error())
 			return constants.SYSTEM_ERROR, -1
 		}
 		if err := myredis.DelKeysWithPattern("contact_user_list_" + ownerId); err != nil {
+			zlog.Error(err.Error())
+		}
+		if err := myredis.DelKeysWithPattern("contact_user_list_" + contactId); err != nil {
 			zlog.Error(err.Error())
 		}
 		return "已添加该联系人", 0
@@ -487,29 +536,8 @@ func (u *userContactService) PassContactApply(ownerId string, contactId string) 
 				return err
 			}
 			// 3. 幂等处理联系人：已存在则恢复，不存在则插入
-			var existingContact model.UserContact
-			if err := tx.Unscoped().Where("user_id = ? AND contact_id = ?", contactId, ownerId).First(&existingContact).Error; err == nil {
-				if err := tx.Unscoped().Model(&existingContact).UpdateColumn("deleted_at", nil).Error; err != nil {
-					return err
-				}
-				if err := tx.Model(&existingContact).Updates(map[string]interface{}{
-					"status":    contact_status_enum.NORMAL,
-					"update_at": time.Now(),
-				}).Error; err != nil {
-					return err
-				}
-			} else {
-				newContact := model.UserContact{
-					UserId:      contactId,
-					ContactId:   ownerId,
-					ContactType: contact_type_enum.GROUP,
-					Status:      contact_status_enum.NORMAL,
-					CreatedAt:   time.Now(),
-					UpdateAt:    time.Now(),
-				}
-				if res := tx.Create(&newContact); res.Error != nil {
-					return res.Error
-				}
+			if err := restoreOrCreateContact(tx, contactId, ownerId, contact_type_enum.GROUP, time.Now()); err != nil {
+				return err
 			}
 			return nil
 		})
