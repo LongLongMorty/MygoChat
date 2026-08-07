@@ -636,36 +636,36 @@ export default {
 .contactlist-header {
   display: flex;
   flex-direction: row;
-  margin-top: 10px;
-  margin-bottom: 10px;
+  padding: 12px 10px;
 }
 
 .contact-search-input {
   width: 185px;
-  height: 30px;
-  margin-left: 5px;
   margin-right: 5px;
 }
 
 .contactlist-header-right {
   width: 40px;
-  height: 30px;
   display: flex;
   justify-content: center;
   align-items: center;
 }
 
 .create-group-btn {
-  background-color: rgb(252, 210.9, 210.9);
+  background-color: var(--brand-bg);
   cursor: pointer;
   border: none;
-  height: 100%;
   width: 30px;
   height: 30px;
   display: flex;
   justify-content: center;
   align-items: center;
   border-radius: 10px;
+  transition: background-color 0.15s ease;
+}
+
+.create-group-btn:hover {
+  background-color: #d3f3e2;
 }
 
 .create-group-icon {
@@ -674,40 +674,40 @@ export default {
 }
 
 .el-menu {
-  background-color: rgb(252, 210.9, 210.9);
+  background-color: var(--bg-sidebar);
   width: 101%;
+  border-right: none;
 }
 
 .el-menu-item {
-  background-color: rgb(255, 255, 255);
-  height: 45px;
+  background-color: var(--bg-sidebar);
+  height: 48px;
+  display: flex;
+  align-items: center;
+  transition: background-color 0.15s ease;
+}
+
+.el-menu-item:hover {
+  background-color: var(--bg-hover);
 }
 
 .contactlist-user-title {
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-family);
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 h3 {
-  font-family: Arial, Helvetica, sans-serif;
-  color: rgb(69, 69, 68);
-}
-
-.modal-quit-btn-container {
-  height: 30%;
-  width: 100%;
-  display: flex;
-  flex-direction: row-reverse;
+  font-family: var(--font-family);
+  color: var(--text-primary);
 }
 
 .modal-quit-btn {
-  background-color: rgba(255, 255, 255, 0);
-  color: rgb(229, 25, 25);
+  background-color: transparent;
+  color: var(--text-danger);
   padding: 15px;
   border: none;
   cursor: pointer;
-  position: fixed;
-  justify-content: center;
-  align-items: center;
 }
 
 .modal-header {
@@ -717,7 +717,6 @@ h3 {
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  /*background-color:aqua;*/
 }
 
 .modal-body {
@@ -763,9 +762,12 @@ h3 {
 }
 
 .contactlist-avatar {
-  width: 30px;
-  height: 30px;
-  margin-right: 20px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  margin-right: 12px;
+  flex-shrink: 0;
 }
 
 .newcontact-list {
@@ -773,7 +775,7 @@ h3 {
   display: flex;
   flex-direction: column;
   align-items: center;
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-family);
 }
 
 .newcontact-item {
@@ -782,16 +784,25 @@ h3 {
   justify-content: space-between;
   align-items: center;
   width: 100%;
-  height: 40px;
+  height: 44px;
 }
 
 .action-btn {
-  background-color: rgb(252, 210.9, 210.9);
+  background-color: var(--brand-bg);
+  color: var(--brand);
   border: none;
   cursor: pointer;
   justify-content: center;
   align-items: center;
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-family);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-weight: 500;
+  transition: background-color 0.15s ease;
+}
+
+.action-btn:hover {
+  background-color: #d3f3e2;
 }
 
 .contactlist-user-menu-item {
@@ -801,16 +812,25 @@ h3 {
 
 .contactlist-user-item {
   width: 221px;
-  height: 45px;
+  height: 48px;
   display: flex;
   align-items: center;
-  color: rgba(43, 42, 42, 0.893);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.contactlist-user-item:hover {
+  background-color: var(--bg-hover);
 }
 
 .contactlist-user-avatar {
-  width: 30px;
-  height: 30px;
-  margin-left: 20px;
-  margin-right: 20px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  margin-left: 16px;
+  margin-right: 12px;
+  flex-shrink: 0;
 }
 </style>

@@ -332,7 +332,7 @@
                           >
                             <template #trigger>
                               <el-button
-                                style="background-color: rgb(252, 210.9, 210.9)"
+                                style="background-color: var(--brand)"
                                 >上传图片</el-button
                               >
                             </template>
@@ -345,7 +345,7 @@
                 <template v-slot:footer>
                   <div class="updategroupinfo-modal-footer">
                     <el-button
-                      style="background-color: rgb(252, 210.9, 210.9)"
+                      style="background-color: var(--brand)"
                       @click="closeUpdateGroupInfoModal"
                     >
                       完成
@@ -534,6 +534,8 @@
                           margin-left: 10px;
                           margin-right: 10px;
                           margin-top: 10px;
+                          border-radius: 50%;
+                          object-fit: cover;
                         "
                       >
                       </el-image>
@@ -570,6 +572,8 @@
                           margin-left: 10px;
                           margin-right: 10px;
                           margin-top: 10px;
+                          border-radius: 50%;
+                          object-fit: cover;
                         "
                       >
                       </el-image>
@@ -598,7 +602,7 @@
                         <div class="left-message-file-download">
                           <el-button
                             style="
-                              background-color: rgb(252, 210.9, 210.9);
+                              background-color: var(--brand);
                               margin-top: 20px;
                             "
                             size="small"
@@ -2397,7 +2401,7 @@ export default {
 }
 
 .el-menu {
-  background-color: rgb(252, 210.9, 210.9);
+  background-color: var(--brand);
   width: 100%;
 }
 
@@ -2488,13 +2492,6 @@ h3 {
   margin-right: 20px;
 }
 
-.setting-btn {
-  background-color: rgba(255, 255, 255, 0);
-  border: none;
-  cursor: pointer;
-  color: rgb(201, 139, 139);
-}
-
 .modal-list {
   height: 270px;
   width: 90%;
@@ -2540,63 +2537,68 @@ h3 {
 }
 
 .left-message-contactname {
-  font-family: Arial, Helvetica, sans-serif;
-  color: rgb(77, 61, 192);
-  font-weight: bold;
+  font-family: var(--font-family);
+  color: var(--text-secondary);
+  font-weight: 600;
   margin-top: 5px;
   margin-right: 10px;
-  font-size: 15px;
+  font-size: 13px;
 }
 
 .right-message-contactname {
-  font-family: Arial, Helvetica, sans-serif;
-  color: rgb(77, 61, 192);
-  font-weight: bold;
+  font-family: var(--font-family);
+  color: var(--text-secondary);
+  font-weight: 600;
   margin-top: 5px;
   margin-left: 10px;
-  font-size: 15px;
+  font-size: 13px;
 }
 
 .left-message-time {
-  font-family: Arial, Helvetica, sans-serif;
-  color: rgb(237, 161, 161);
+  font-family: var(--font-family);
+  color: var(--text-secondary);
   margin-top: 5px;
-  font-size: 15px;
+  font-size: 12px;
 }
 
 .right-message-time {
-  font-family: Arial, Helvetica, sans-serif;
-  color: rgb(237, 161, 161);
+  font-family: var(--font-family);
+  color: var(--text-secondary);
   margin-top: 5px;
-  font-size: 15px;
+  font-size: 12px;
 }
 
 .left-message-content {
-  background-color: rgb(239, 255, 174);
-  color: rgb(74, 72, 72);
+  background-color: var(--bubble-other);
+  color: var(--text-primary);
   display: inline-block;
   max-width: 400px;
   white-space: normal; /* 允许文本换行 */
-  font-family: Arial, Helvetica, sans-serif;
-  border-radius: 6px;
-  padding: 3px;
-  padding-right: 5px;
+  font-family: var(--font-family);
+  border-radius: 8px;
+  border-top-left-radius: 2px;
+  border: 1px solid var(--border-color);
+  padding: 10px 14px;
   font-size: 14px;
-  box-shadow: 0px 0px 5px 0px rgba(0, 0, 0, 0.2);
+  line-height: 1.5;
+  box-shadow: var(--shadow-card);
+  word-break: break-word;
 }
 
 .right-message-content {
-  background-color: rgb(252, 210.9, 210.9);
-  color: rgb(74, 72, 72);
+  background-color: var(--bubble-self);
+  color: var(--text-primary);
   display: inline-block;
   max-width: 400px;
   white-space: normal; /* 允许文本换行 */
-  font-family: Arial, Helvetica, sans-serif;
-  border-radius: 6px;
-  padding: 3px;
-  padding-right: 5px;
+  font-family: var(--font-family);
+  border-radius: 8px;
+  border-top-right-radius: 2px;
+  padding: 10px 14px;
   font-size: 14px;
-  box-shadow: 0px 0px 5px 0px rgba(0, 0, 0, 0.2);
+  line-height: 1.5;
+  box-shadow: var(--shadow-card);
+  word-break: break-word;
 }
 
 .left-message-file-container {
@@ -2764,7 +2766,7 @@ h3 {
 }
 
 .action-btn {
-  background-color: rgb(252, 210.9, 210.9);
+  background-color: var(--brand);
   border: none;
   cursor: pointer;
   justify-content: center;
@@ -2801,7 +2803,7 @@ h3 {
   color: rgb(57, 57, 57);
 }
 .removegroupmembers-button {
-  background-color: rgb(252, 210.9, 210.9);
+  background-color: var(--brand);
 }
 
 .video-modal-overlay {
@@ -2860,7 +2862,43 @@ h3 {
   justify-content: center;
 }
 
-.video-modal-footer-btn {
-  background-color: rgb(252, 210.9, 210.9);
+/* ============ 设计系统统一（KamaChat） ============ */
+.main-container {
+  background: var(--bg-page);
+}
+
+.main-container .el-scrollbar__wrap {
+  padding: 16px 20px;
+}
+
+.chat-title {
+  font-family: var(--font-family);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.setting-btn {
+  color: var(--text-secondary);
+}
+
+/* 发送按钮品牌化 */
+.send-btn {
+  background: linear-gradient(135deg, #07c160, #06ad56);
+  border: none;
+  color: #fff;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  transition: opacity 0.2s ease;
+}
+
+.send-btn:hover {
+  background: linear-gradient(135deg, #06b357, #059d4d);
+  opacity: 0.92;
+}
+
+/* 下载按钮品牌化（原非法 RGB 背景） */
+.el-button--small {
+  border-radius: var(--radius-sm);
 }
 </style>

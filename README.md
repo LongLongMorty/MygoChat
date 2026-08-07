@@ -225,3 +225,12 @@ go run ./test/performance/ws_load.go \
     ├── performance/        # 性能测试工具 + 结果
     └── integration/        # 集成测试
 ```
+## 演示截图
+
+### 聊天页
+
+![聊天页](https://longlongmorty.oss-cn-beijing.aliyuncs.com/img/20260807131145121.png)
+
+### 音视频界面
+
+![音视频界面](https://longlongmorty.oss-cn-beijing.aliyuncs.com/img/20260807131301301.png)

@@ -1,20 +1,11 @@
 <template>
-  <div class="login-wrap">
-    <div
-      class="login-window"
-      :style="{
-        boxShadow: `var(${'--el-box-shadow-dark'})`,
-      }"
-    >
-      <h2 class="login-item">登录</h2>
-      <el-form
-        :model="loginData"
-        label-width="70px"
-        class="demo-dynamic"
-      >
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <h2 class="auth-title">KamaChat</h2>
+      <p class="auth-subtitle">仿微信即时通讯</p>
+      <el-form :model="loginData" class="auth-form" @keyup.enter="handleLogin">
         <el-form-item
           prop="email"
-          label="邮箱"
           :rules="[
             {
               required: true,
@@ -23,11 +14,15 @@
             },
           ]"
         >
-          <el-input v-model="loginData.email" />
+          <el-input
+            v-model="loginData.email"
+            placeholder="邮箱"
+            size="large"
+            :prefix-icon="'Message'"
+          />
         </el-form-item>
         <el-form-item
           prop="password"
-          label="密码"
           :rules="[
             {
               required: true,
@@ -36,18 +31,22 @@
             },
           ]"
         >
-          <el-input type="password" v-model="loginData.password" />
+          <el-input
+            type="password"
+            v-model="loginData.password"
+            placeholder="密码"
+            size="large"
+            show-password
+            :prefix-icon="'Lock'"
+          />
         </el-form-item>
-      </el-form>
-      <div class="login-button-container">
-        <el-button type="primary" class="login-btn" @click="handleLogin"
-          >登录</el-button
+        <el-button type="primary" class="auth-btn" @click="handleLogin"
+          >登 录</el-button
         >
-      </div>
-
-      <div class="go-register-button-container">
-        <button class="go-register-btn" @click="handleRegister">注册</button>
-        <button class="go-email-btn" @click="handleEmailLogin">验证码登录</button>
+      </el-form>
+      <div class="auth-links">
+        <button class="auth-link-btn" @click="handleRegister">注册账号</button>
+        <button class="auth-link-btn" @click="handleEmailLogin">验证码登录</button>
       </div>
     </div>
   </div>
@@ -144,64 +143,5 @@ export default {
 </script>
 
 <style>
-.login-wrap {
-  height: 100vh;
-  background-image: url("@/assets/img/chat_server_background.jpg");
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-}
-
-.login-window {
-  background-color: rgb(255, 255, 255, 0.7);
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  padding: 30px 50px;
-  border-radius: 20px;
-}
-
-.login-item {
-  text-align: center;
-  margin-bottom: 20px;
-  color: #494949;
-}
-
-.login-button-container {
-  display: flex;
-  justify-content: center;
-  margin-top: 20px;
-  width: 100%;
-}
-
-.login-btn,
-.login-btn:hover {
-  background-color: rgb(229, 132, 132);
-  border: none;
-  color: #ffffff;
-  font-weight: bold;
-}
-
-.go-register-button-container {
-  display: flex;
-  flex-direction: row-reverse;
-  margin-top: 10px;
-}
-
-.go-register-btn,
-.go-email-btn {
-  background-color: rgba(255, 255, 255, 0);
-  border: none;
-  cursor: pointer;
-  color: #d65b54;
-  font-weight: bold;
-  text-decoration: underline;
-  text-underline-offset: 0.2em;
-  margin-left: 10px;
-}
-
-.el-alert {
-  margin-top: 20px;
-}
+/* 认证页样式统一由全局 assets/css/chat.css 的 .auth-* 提供 */
 </style>

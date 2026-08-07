@@ -103,7 +103,7 @@
                     >
                       <template #trigger>
                         <el-button
-                          style="background-color: rgb(252, 210.9, 210.9)"
+                          style="background-color: var(--brand-bg)"
                           >上传图片</el-button
                         >
                       </template>
@@ -315,7 +315,7 @@ export default {
 
 h3 {
   font-family: Arial, Helvetica, sans-serif;
-  color: rgb(69, 69, 68);
+  color: var(--text-primary);
 }
 
 .modal-quit-btn-container {
@@ -327,7 +327,7 @@ h3 {
 
 .modal-quit-btn {
   background-color: rgba(255, 255, 255, 0);
-  color: rgb(229, 25, 25);
+  color: var(--text-danger);
   padding: 15px;
   border: none;
   cursor: pointer;
@@ -376,7 +376,7 @@ h2 {
 }
 
 .el-menu {
-  background-color: rgb(252, 210.9, 210.9);
+  background-color: var(--brand-bg);
   width: 101%;
 }
 

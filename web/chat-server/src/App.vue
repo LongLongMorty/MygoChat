@@ -4,11 +4,14 @@
 
 <script>
 import { onMounted } from "vue";
+import { useRouter } from "vue-router";
 import { useStore } from "vuex";
+import { ElMessage } from "element-plus";
 import axios from "@/api";
 export default {
   name: "App",
   setup() {
+    const router = useRouter();
     const store = useStore();
     const getUserInfo = async () => {
       try {
@@ -27,7 +30,6 @@ export default {
         } else {
           console.error(rsp.data.message);
         }
-        console.log(rsp);
       } catch (error) {
         console.log(error);
       }
@@ -35,17 +37,21 @@ export default {
     const logout = async () => {
       store.commit("cleanUserInfo");
       const req = {
-        owner_id: data.userInfo.uuid,
+        owner_id: store.state.userInfo.uuid,
       };
-      const rsp = await axios.post(
-        store.state.backendUrl + "/user/wsLogout",
-        req
-      );
-      if (rsp.data.code == 200) {
-        router.push("/login");
-        ElMessage.success("账号被封禁，退出登录");
-      } else {
-        ElMessage.error(rsp.data.message);
+      try {
+        const rsp = await axios.post(
+          store.state.backendUrl + "/user/wsLogout",
+          req
+        );
+        if (rsp.data.code == 200) {
+          router.push("/login");
+          ElMessage.success("账号被封禁，退出登录");
+        } else {
+          ElMessage.error(rsp.data.message);
+        }
+      } catch (error) {
+        console.log(error);
       }
     };
     onMounted(() => {
@@ -56,22 +62,19 @@ export default {
         }
         const wsUrl =
           store.state.wsUrl + "/wss?token=" + store.state.userInfo.token;
-          console.log(wsUrl);
         store.state.socket = new WebSocket(wsUrl);
         store.state.socket.onopen = () => {
-          console.log("WebSocket连接已打开");console.log("连接信令服务器成功");
+          console.log("WebSocket连接已打开");
         };
         store.state.socket.onmessage = (message) => {
           console.log("收到消息：", message.data);
         };
         store.state.socket.onclose = () => {
           console.log("WebSocket连接已关闭");
-        console.log("连接信令服务器断开");
         };
         store.state.socket.onerror = () => {
-          console.log("WebSocket连接发生错误");console.log("连接信令服务器失败，错误信息：", error);
+          console.log("WebSocket连接发生错误");
         };
-        console.log(store.state.socket);
       }
     });
   },
@@ -79,9 +82,5 @@ export default {
 </script>
 
 <style>
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box; /* 推荐使用，以确保布局计算的一致性 */
-}
+/* 全局基础样式由 assets/css/chat.css 提供 */
 </style>

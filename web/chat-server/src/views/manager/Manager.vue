@@ -296,7 +296,7 @@ export default {
 .header-container {
   height: 70px;
   border-bottom: 3px solid #ccc;
-  background-color: rgb(252, 210.9, 210.9);
+  background-color: var(--brand-bg);
   border-top-right-radius: 30px;
   border-top-left-radius: 30px;
   display: flex;
@@ -307,7 +307,7 @@ export default {
 
 .el-menu {
   width: 196px;
-  background-color: rgb(252, 210.9, 210.9);
+  background-color: var(--brand-bg);
 }
 
 .el-menu-item {
@@ -331,7 +331,7 @@ export default {
 .header-title {
   font-family: Arial, Helvetica, sans-serif;
   font-weight: bold;
-  color: rgb(37, 37, 37);
+  color: var(--text-primary);
   font-size: 30px;
 }
 
@@ -342,7 +342,7 @@ export default {
 
 .manager-user-title {
   font-family: Arial, Helvetica, sans-serif;
-  color: rgb(37, 37, 37);
+  color: var(--text-primary);
 }
 
 .manager-user-icon {
@@ -353,7 +353,7 @@ export default {
 
 .manager-group-title {
   font-family: Arial, Helvetica, sans-serif;
-  color: rgb(37, 37, 37);
+  color: var(--text-primary);
 }
 
 .manager-group-icon {

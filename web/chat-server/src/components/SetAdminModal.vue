@@ -41,10 +41,10 @@
       </el-table-column>
     </el-table>
     <div class="main-able-button-container">
-      <el-button style="background-color: rgb(252, 210.9, 210.9); margin-left: 20px;" @click="setAdmin(1)"
+      <el-button style="background-color: var(--brand-bg); margin-left: 20px;" @click="setAdmin(1)"
         >设置/全部设置为管理员</el-button
       >
-      <el-button style="background-color: rgb(252, 210.9, 210.9)" @click="setAdmin(0)"
+      <el-button style="background-color: var(--brand-bg)" @click="setAdmin(0)"
         >取消/全部取消管理员</el-button
       >
     </div>

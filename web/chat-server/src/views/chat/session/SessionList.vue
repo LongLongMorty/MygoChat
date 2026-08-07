@@ -24,6 +24,7 @@
                 <el-menu
                   router
                   unique-opened
+                  :default-openeds="['1']"
                   @open="handleShowUserSessionList"
                   @close="handleHideUserSessionList"
                 >
@@ -344,8 +345,7 @@ export default {
         type: "warning",
       })
         .then(() => {
-          // 执行删除操作
-          this.deleteGroup(group);
+          ElMessage.info("会话删除功能暂未开放");
         })
         .catch(() => {
           // 取消删除操作
@@ -371,88 +371,71 @@ export default {
   display: flex;
   flex-direction: row;
   width: 100%;
-  margin-top: 10px;
-  margin-bottom: 10px;
+  padding: 12px 10px;
 }
 
 .contact-search-input {
-  width: 215px;
-  height: 30px;
-  margin-left: 5px;
-  margin-right: 2px;
+  width: 100%;
 }
 
 .el-menu {
-  background-color: rgb(252, 210.9, 210.9);
+  background-color: var(--bg-sidebar);
   width: 100%;
+  border-right: none;
 }
 
 .el-menu-item {
-  background-color: rgb(255, 255, 255);
-  height: 45px;
+  background-color: var(--bg-sidebar);
+  height: 48px;
+  display: flex;
+  align-items: center;
+  transition: background-color 0.15s ease;
+}
+
+.el-menu-item:hover {
+  background-color: var(--bg-hover);
 }
 
 .sessionlist-title {
-  font-family: Arial, Helvetica, sans-serif;
-}
-
-h3 {
-  font-family: Arial, Helvetica, sans-serif;
-  color: rgb(69, 69, 68);
-}
-
-.modal-quit-btn-container {
-  height: 30%;
-  width: 100%;
-  display: flex;
-  flex-direction: row-reverse;
-}
-
-.modal-quit-btn {
-  background-color: rgba(255, 255, 255, 0);
-  color: rgb(229, 25, 25);
-  padding: 15px;
-  border: none;
-  cursor: pointer;
-  position: fixed;
-  justify-content: center;
-  align-items: center;
-}
-
-.modal-header {
-  height: 20%;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  /*background-color:aqua;*/
-}
-
-.modal-body {
-  height: 55%;
-  width: 400px;
-}
-
-.modal-footer {
-  height: 25%;
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.modal-header-title {
-  height: 70%;
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
+  font-family: var(--font-family);
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .sessionlist-avatar {
-  width: 30px;
-  height: 30px;
-  margin-right: 20px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  margin-right: 12px;
+  flex-shrink: 0;
+}
+
+.chat-name {
+  font-family: var(--font-family);
+  color: var(--text-primary);
+}
+
+/* 右侧空壳聊天区：统一为主内容区 + 空状态 */
+.chat-window-container {
+  width: 100%;
+  height: 100%;
+}
+
+.chat-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-page);
+  min-width: 0;
+}
+
+.chat-screen {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-size: 15px;
 }
 </style>

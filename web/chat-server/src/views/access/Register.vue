@@ -1,21 +1,11 @@
 <template>
-  <div class="register-wrap">
-    <div
-      class="register-window"
-      :style="{
-        boxShadow: `var(${'--el-box-shadow-dark'})`,
-      }"
-    >
-      <h2 class="register-item">注册</h2>
-      <el-form
-        ref="formRef"
-        :model="registerData"
-        label-width="70px"
-        class="demo-dynamic"
-      >
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <h2 class="auth-title">注册</h2>
+      <p class="auth-subtitle">创建你的 KamaChat 账号</p>
+      <el-form ref="formRef" :model="registerData" class="auth-form" @keyup.enter="handleRegister">
         <el-form-item
           prop="nickname"
-          label="昵称"
           :rules="[
             {
               required: true,
@@ -30,11 +20,15 @@
             },
           ]"
         >
-          <el-input v-model="registerData.nickname" />
+          <el-input
+            v-model="registerData.nickname"
+            placeholder="昵称"
+            size="large"
+            :prefix-icon="'User'"
+          />
         </el-form-item>
         <el-form-item
           prop="email"
-          label="邮箱"
           :rules="[
             {
               required: true,
@@ -43,11 +37,15 @@
             },
           ]"
         >
-          <el-input v-model="registerData.email" />
+          <el-input
+            v-model="registerData.email"
+            placeholder="邮箱"
+            size="large"
+            :prefix-icon="'Message'"
+          />
         </el-form-item>
         <el-form-item
           prop="password"
-          label="密码"
           :rules="[
             {
               required: true,
@@ -56,11 +54,17 @@
             },
           ]"
         >
-          <el-input type="password" v-model="registerData.password" />
+          <el-input
+            type="password"
+            v-model="registerData.password"
+            placeholder="密码"
+            size="large"
+            show-password
+            :prefix-icon="'Lock'"
+          />
         </el-form-item>
         <el-form-item
           prop="email_code"
-          label="验证码"
           :rules="[
             {
               required: true,
@@ -69,29 +73,30 @@
             },
           ]"
         >
-          <el-input v-model="registerData.email_code" style="max-width: 200px">
+          <el-input
+            v-model="registerData.email_code"
+            placeholder="验证码"
+            size="large"
+            :prefix-icon="'Key'"
+          >
             <template #append>
               <el-button
                 @click="sendEmailCode"
-                style="background-color: rgb(229, 132, 132); color: #ffffff"
+                style="background-color: var(--brand); color: #ffffff; border: none"
                 >点击发送</el-button
               >
             </template>
           </el-input>
         </el-form-item>
-      </el-form>
-      <div class="register-button-container">
-        <el-button type="primary" class="register-btn" @click="handleRegister"
-          >注册</el-button
+        <el-button type="primary" class="auth-btn" @click="handleRegister"
+          >注 册</el-button
         >
-      </div>
-      <div class="go-login-button-container">
-        <button class="go-email-login-btn" @click="handleEmailLogin">
+      </el-form>
+      <div class="auth-links">
+        <button class="auth-link-btn" @click="handleEmailLogin">
           验证码登录
         </button>
-        <button class="go-password-login-btn" @click="handleLogin">
-          密码登录
-        </button>
+        <button class="auth-link-btn" @click="handleLogin">密码登录</button>
       </div>
     </div>
   </div>
@@ -229,64 +234,5 @@ export default {
 </script>
 
 <style>
-.register-wrap {
-  height: 100vh;
-  background-image: url("@/assets/img/chat_server_background.jpg");
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-}
-
-.register-window {
-  background-color: rgb(255, 255, 255, 0.7);
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  padding: 30px 50px;
-  border-radius: 20px;
-}
-
-.register-item {
-  text-align: center;
-  margin-bottom: 20px;
-  color: #494949;
-}
-
-.register-button-container {
-  display: flex;
-  justify-content: center;
-  margin-top: 20px;
-  width: 100%;
-}
-
-.register-btn,
-.register-btn:hover {
-  background-color: rgb(229, 132, 132);
-  border: none;
-  color: #ffffff;
-  font-weight: bold;
-}
-
-.el-alert {
-  margin-top: 20px;
-}
-
-.go-login-button-container {
-  display: flex;
-  flex-direction: row-reverse;
-  margin-top: 10px;
-}
-
-.go-email-login-btn,
-.go-password-login-btn {
-  background-color: rgba(255, 255, 255, 0);
-  border: none;
-  cursor: pointer;
-  color: #d65b54;
-  font-weight: bold;
-  text-decoration: underline;
-  text-underline-offset: 0.2em;
-  margin-left: 10px;
-}
+/* 认证页样式统一由全局 assets/css/chat.css 的 .auth-* 提供 */
 </style>

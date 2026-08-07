@@ -42,11 +42,11 @@
     </el-table>
     <div class="main-able-button-container">
       <el-button
-        style="background-color: rgb(252, 210.9, 210.9); margin-left: 20px;" @click="setGroupsStatus(1)"
+        style="background-color: var(--brand-bg); margin-left: 20px;" @click="setGroupsStatus(1)"
         >禁用/全部禁用</el-button
       >
     <el-button
-        style="background-color: rgb(252, 210.9, 210.9);" @click="setGroupsStatus(0)"
+        style="background-color: var(--brand-bg);" @click="setGroupsStatus(0)"
         >启用/全部启用</el-button
       >
     </div>
