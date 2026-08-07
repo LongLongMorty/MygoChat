@@ -96,6 +96,7 @@ func init() {
 		// 消息（含上传，P0-4: 上传现在受认证保护）
 		authGroup.POST("/message/getMessageList", v1.GetMessageList)
 		authGroup.POST("/message/getGroupMessageList", v1.GetGroupMessageList)
+		authGroup.POST("/message/revokeMessage", v1.RevokeMessage)
 		authGroup.POST("/message/uploadAvatar", v1.UploadAvatar)
 		authGroup.POST("/message/uploadFile", v1.UploadFile)
 		// P1 修复：文件下载改为鉴权端点

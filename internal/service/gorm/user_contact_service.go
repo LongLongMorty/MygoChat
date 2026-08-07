@@ -16,6 +16,7 @@ import (
 	"kama_chat_server/pkg/enum/contact/contact_type_enum"
 	"kama_chat_server/pkg/enum/contact_apply/contact_apply_status_enum"
 	"kama_chat_server/pkg/enum/group_info/group_status_enum"
+	"kama_chat_server/pkg/enum/group_member/group_member_role_enum"
 	"kama_chat_server/pkg/enum/user_info/user_status_enum"
 	"kama_chat_server/pkg/util/random"
 	"kama_chat_server/pkg/zlog"
@@ -161,14 +162,17 @@ func (u *userContactService) GetContactInfo(contactId string) (string, respond.G
 		}
 		// 没被禁用
 		if group.Status != group_status_enum.DISABLE {
+			memberCnt, err := GroupMemberService.CountActiveMembers(group.Uuid)
+			if err != nil {
+				return constants.SYSTEM_ERROR, respond.GetContactInfoRespond{}, -1
+			}
 			return "获取联系人信息成功", respond.GetContactInfoRespond{
 				ContactId:        group.Uuid,
 				ContactName:      group.Name,
 				ContactAvatar:    group.Avatar,
 				ContactNotice:    group.Notice,
 				ContactAddMode:   group.AddMode,
-				ContactMembers:   group.Members,
-				ContactMemberCnt: group.MemberCnt,
+				ContactMemberCnt: int(memberCnt),
 				ContactOwnerId:   group.OwnerId,
 			}, 0
 		} else {
@@ -422,13 +426,14 @@ func (u *userContactService) GetAddGroupList(groupId string) (string, []respond.
 
 // PassContactApply 通过联系人申请
 func (u *userContactService) PassContactApply(ownerId string, contactId string) (string, int) {
-	// ownerId 如果是用户的话就是登录用户，如果是群聊的话就是群聊id
 	var contactApply model.ContactApply
 	if res := dao.GormDB.Where("contact_id = ? AND user_id = ?", ownerId, contactId).First(&contactApply); res.Error != nil {
 		zlog.Error(res.Error.Error())
 		return constants.SYSTEM_ERROR, -1
 	}
-	if ownerId[0] == 'U' {
+
+	// 使用 contact_type 判断申请类型，而非 ownerId 首字符
+	if contactApply.ContactType == contact_type_enum.USER {
 		var user model.UserInfo
 		if res := dao.GormDB.Where("uuid = ?", contactId).Find(&user); res.Error != nil {
 			zlog.Error(res.Error.Error())
@@ -445,8 +450,8 @@ func (u *userContactService) PassContactApply(ownerId string, contactId string) 
 		newContact := model.UserContact{
 			UserId:      ownerId,
 			ContactId:   contactId,
-			ContactType: contact_type_enum.USER,     // 用户
-			Status:      contact_status_enum.NORMAL, // 正常
+			ContactType: contact_type_enum.USER,
+			Status:      contact_status_enum.NORMAL,
 			CreatedAt:   time.Now(),
 			UpdateAt:    time.Now(),
 		}
@@ -457,8 +462,8 @@ func (u *userContactService) PassContactApply(ownerId string, contactId string) 
 		anotherContact := model.UserContact{
 			UserId:      contactId,
 			ContactId:   ownerId,
-			ContactType: contact_type_enum.USER,     // 用户
-			Status:      contact_status_enum.NORMAL, // 正常
+			ContactType: contact_type_enum.USER,
+			Status:      contact_status_enum.NORMAL,
 			CreatedAt:   newContact.CreatedAt,
 			UpdateAt:    newContact.UpdateAt,
 		}
@@ -471,45 +476,51 @@ func (u *userContactService) PassContactApply(ownerId string, contactId string) 
 		}
 		return "已添加该联系人", 0
 	} else {
-		var group model.GroupInfo
-		if res := dao.GormDB.Where("uuid = ?", ownerId).Find(&group); res.Error != nil {
-			zlog.Error(res.Error.Error())
-		}
-		if group.Status == group_status_enum.DISABLE {
-			zlog.Error("群聊已被禁用")
-			return "群聊已被禁用", -2
-		}
-		contactApply.Status = contact_apply_status_enum.AGREE
-		if res := dao.GormDB.Save(&contactApply); res.Error != nil {
-			zlog.Error(res.Error.Error())
+		// 群申请：事务中完成更新申请状态 → 加入成员 → 创建联系人 → 清理缓存
+		err := dao.GormDB.Transaction(func(tx *gorm.DB) error {
+			// 1. 更新申请状态
+			if res := tx.Model(&contactApply).Update("status", contact_apply_status_enum.AGREE); res.Error != nil {
+				return res.Error
+			}
+			// 2. 加入群成员关系表（幂等 — 已存在则恢复，不存在则插入）
+			if err := GroupMemberService.addMember(tx, ownerId, contactId, group_member_role_enum.MEMBER); err != nil {
+				return err
+			}
+			// 3. 幂等处理联系人：已存在则恢复，不存在则插入
+			var existingContact model.UserContact
+			if err := tx.Unscoped().Where("user_id = ? AND contact_id = ?", contactId, ownerId).First(&existingContact).Error; err == nil {
+				if err := tx.Unscoped().Model(&existingContact).UpdateColumn("deleted_at", nil).Error; err != nil {
+					return err
+				}
+				if err := tx.Model(&existingContact).Updates(map[string]interface{}{
+					"status":    contact_status_enum.NORMAL,
+					"update_at": time.Now(),
+				}).Error; err != nil {
+					return err
+				}
+			} else {
+				newContact := model.UserContact{
+					UserId:      contactId,
+					ContactId:   ownerId,
+					ContactType: contact_type_enum.GROUP,
+					Status:      contact_status_enum.NORMAL,
+					CreatedAt:   time.Now(),
+					UpdateAt:    time.Now(),
+				}
+				if res := tx.Create(&newContact); res.Error != nil {
+					return res.Error
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			zlog.Error("通过加群申请事务失败: " + err.Error())
+			if errors.Is(err, ErrMemberKicked) {
+				return err.Error(), -2
+			}
 			return constants.SYSTEM_ERROR, -1
 		}
-		// 群聊就只用创建一个UserContact，因为一个UserContact足以表达双方的状态
-		newContact := model.UserContact{
-			UserId:      contactId,
-			ContactId:   ownerId,
-			ContactType: contact_type_enum.GROUP,    // 用户
-			Status:      contact_status_enum.NORMAL, // 正常
-			CreatedAt:   time.Now(),
-			UpdateAt:    time.Now(),
-		}
-		if res := dao.GormDB.Create(&newContact); res.Error != nil {
-			zlog.Error(res.Error.Error())
-			return constants.SYSTEM_ERROR, -1
-		}
-		var members []string
-		if err := json.Unmarshal(group.Members, &members); err != nil {
-			zlog.Error(err.Error())
-			return constants.SYSTEM_ERROR, -1
-		}
-		members = append(members, contactId)
-		group.MemberCnt = len(members)
-		group.Members, _ = json.Marshal(members)
-		if res := dao.GormDB.Save(&group); res.Error != nil {
-			zlog.Error(res.Error.Error())
-			return constants.SYSTEM_ERROR, -1
-		}
-		if err := myredis.DelKeysWithPattern("my_joined_group_list_" + ownerId); err != nil {
+		if err := myredis.DelKeysWithPattern("my_joined_group_list_" + contactId); err != nil {
 			zlog.Error(err.Error())
 		}
 		return "已通过加群申请", 0

@@ -66,7 +66,8 @@ func EnterGroupDirectly(c *gin.Context) {
 		})
 		return
 	}
-	message, ret := gorm.GroupInfoService.EnterGroupDirectly(c.GetString("uuid"), req.ContactId)
+	// 语义: ownerId=群聊id, contactId=进群的用户; owner_id 由 JWT 覆盖为当前用户, contact_id 为目标群聊
+	message, ret := gorm.GroupInfoService.EnterGroupDirectly(req.ContactId, c.GetString("uuid"))
 	JsonBack(c, message, ret, nil)
 }
 

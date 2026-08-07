@@ -51,6 +51,7 @@ func InitDB() error {
 	err = GormDB.AutoMigrate(
 		&model.UserInfo{},
 		&model.GroupInfo{},
+		&model.GroupMember{},
 		&model.UserContact{},
 		&model.Session{},
 		&model.ContactApply{},

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
+	"gorm.io/gorm"
 	"io"
 	"kama_chat_server/internal/config"
 	"kama_chat_server/internal/dao"
@@ -55,99 +56,174 @@ type messageService struct {
 
 var MessageService = new(messageService)
 
-// GetMessageList 获取聊天记录
-func (m *messageService) GetMessageList(userOneId, userTwoId string) (string, []respond.GetMessageListRespond, int) {
-	rspString, err := myredis.GetKeyNilIsErr("message_list_" + userOneId + "_" + userTwoId)
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			zlog.Info(err.Error())
-			zlog.Info(fmt.Sprintf("%s %s", userTwoId, userTwoId))
-			var messageList []model.Message
-			if res := dao.GormDB.Where("(send_id = ? AND receive_id = ?) OR (send_id = ? AND receive_id = ?)", userOneId, userTwoId, userTwoId, userOneId).Order("created_at ASC").Find(&messageList); res.Error != nil {
-				zlog.Error(res.Error.Error())
-				return constants.SYSTEM_ERROR, nil, -1
-			}
-			var rspList []respond.GetMessageListRespond
-			for _, message := range messageList {
-				rspList = append(rspList, respond.GetMessageListRespond{
-					SendId:     message.SendId,
-					SendName:   message.SendName,
-					SendAvatar: message.SendAvatar,
-					ReceiveId:  message.ReceiveId,
-					Content:    message.Content,
-					Url:        message.Url,
-					Type:       message.Type,
-					FileType:   message.FileType,
-					FileName:   message.FileName,
-					FileSize:   message.FileSize,
-					CreatedAt:  message.CreatedAt.Format("2006-01-02 15:04:05"),
-				})
-			}
-			//rspString, err := json.Marshal(rspList)
-			//if err != nil {
-			//	zlog.Error(err.Error())
-			//}
-			//if err := myredis.SetKeyEx("message_list_"+userOneId+"_"+userTwoId, string(rspString), time.Minute*constants.REDIS_TIMEOUT); err != nil {
-			//	zlog.Error(err.Error())
-			//}
-			return "获取聊天记录成功", rspList, 0
-		} else {
-			zlog.Error(err.Error())
-			return constants.SYSTEM_ERROR, nil, -1
-		}
+// defaultPageLimit 历史消息分页默认/最大条数
+const (
+	defaultPageLimit = 50
+	maxPageLimit     = 100
+)
+
+// normalizePageLimit 规范化分页参数：非法值回退默认，超上限截断
+func normalizePageLimit(limit int) int {
+	if limit <= 0 {
+		return defaultPageLimit
 	}
-	var rsp []respond.GetMessageListRespond
-	if err := json.Unmarshal([]byte(rspString), &rsp); err != nil {
-		zlog.Error(err.Error())
+	if limit > maxPageLimit {
+		return maxPageLimit
 	}
-	return "获取群聊记录成功", rsp, 0
+	return limit
 }
 
-// GetGroupMessageList 获取群聊消息记录
-func (m *messageService) GetGroupMessageList(groupId string) (string, []respond.GetGroupMessageListRespond, int) {
-	rspString, err := myredis.GetKeyNilIsErr("group_messagelist_" + groupId)
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			var messageList []model.Message
-			if res := dao.GormDB.Where("receive_id = ?", groupId).Order("created_at ASC").Find(&messageList); res.Error != nil {
-				zlog.Error(res.Error.Error())
-				return constants.SYSTEM_ERROR, nil, -1
+// GetMessageList 获取聊天记录（游标分页）
+// limit 默认 50 最大 100；beforeId>0 时返回 id<beforeId 的最近 limit 条（上翻页）
+func (m *messageService) GetMessageList(userOneId, userTwoId string, limit int, beforeId int64) (string, []respond.GetMessageListRespond, int) {
+	limit = normalizePageLimit(limit)
+	// 仅第一页（无游标）走缓存；翻页查询实时查库
+	cacheKey := "message_list_" + userOneId + "_" + userTwoId
+	if beforeId <= 0 {
+		rspString, err := myredis.GetKeyNilIsErr(cacheKey)
+		if err == nil {
+			var rsp []respond.GetMessageListRespond
+			if err := json.Unmarshal([]byte(rspString), &rsp); err != nil {
+				zlog.Error(err.Error())
 			}
-			var rspList []respond.GetGroupMessageListRespond
-			for _, message := range messageList {
-				rsp := respond.GetGroupMessageListRespond{
-					SendId:     message.SendId,
-					SendName:   message.SendName,
-					SendAvatar: message.SendAvatar,
-					ReceiveId:  message.ReceiveId,
-					Content:    message.Content,
-					Url:        message.Url,
-					Type:       message.Type,
-					FileType:   message.FileType,
-					FileName:   message.FileName,
-					FileSize:   message.FileSize,
-					CreatedAt:  message.CreatedAt.Format("2006-01-02 15:04:05"),
-				}
-				rspList = append(rspList, rsp)
-			}
-			//rspString, err := json.Marshal(rspList)
-			//if err != nil {
-			//	zlog.Error(err.Error())
-			//}
-			//if err := myredis.SetKeyEx("group_messagelist_"+groupId, string(rspString), time.Minute*constants.REDIS_TIMEOUT); err != nil {
-			//	zlog.Error(err.Error())
-			//}
-			return "获取聊天记录成功", rspList, 0
-		} else {
+			return "获取聊天记录成功", rsp, 0
+		} else if !errors.Is(err, redis.Nil) {
 			zlog.Error(err.Error())
-			return constants.SYSTEM_ERROR, nil, -1
 		}
 	}
-	var rsp []respond.GetGroupMessageListRespond
-	if err := json.Unmarshal([]byte(rspString), &rsp); err != nil {
-		zlog.Error(err.Error())
+
+	// 双向查询：两侧各自带游标条件（分组写法避免 GORM Or 链优先级问题），
+	// 每侧都能命中 (send_id, receive_id) 复合索引
+	var messageList []model.Message
+	var query *gorm.DB
+	if beforeId > 0 {
+		query = dao.GormDB.Where(
+			"(send_id = ? AND receive_id = ? AND id < ?) OR (send_id = ? AND receive_id = ? AND id < ?)",
+			userOneId, userTwoId, beforeId, userTwoId, userOneId, beforeId,
+		)
+	} else {
+		query = dao.GormDB.Where(
+			"(send_id = ? AND receive_id = ?) OR (send_id = ? AND receive_id = ?)",
+			userOneId, userTwoId, userTwoId, userOneId,
+		)
 	}
-	return "获取聊天记录成功", rsp, 0
+	if res := query.Order("created_at DESC, id DESC").Limit(limit).Find(&messageList); res.Error != nil {
+		zlog.Error(res.Error.Error())
+		return constants.SYSTEM_ERROR, nil, -1
+	}
+
+	var rspList []respond.GetMessageListRespond
+	for _, message := range messageList {
+		rspList = append(rspList, respond.GetMessageListRespond{
+			Id:            message.Id,
+			SendId:        message.SendId,
+			SendName:      message.SendName,
+			SendAvatar:    message.SendAvatar,
+			ReceiveId:     message.ReceiveId,
+			Content:       message.Content,
+			Url:           message.Url,
+			Type:          message.Type,
+			FileType:      message.FileType,
+			FileName:      message.FileName,
+			FileSize:      message.FileSize,
+			FileSizeBytes: message.FileSizeBytes,
+			ReadStatus:    message.ReadStatus,
+			CreatedAt:     message.CreatedAt.Format("2006-01-02 15:04:05"),
+		})
+	}
+	// 倒序查询后反转回正序
+	for i, j := 0, len(rspList)-1; i < j; i, j = i+1, j-1 {
+		rspList[i], rspList[j] = rspList[j], rspList[i]
+	}
+
+	// 拉取历史即视为已读：把"对方发给我"的消息批量置已读
+	if beforeId <= 0 {
+		now := time.Now()
+		dao.GormDB.Model(&model.Message{}).
+			Where("send_id = ? AND receive_id = ? AND read_status = 0", userTwoId, userOneId).
+			Updates(map[string]interface{}{
+				"read_status": 1,
+				"read_at":     now,
+			})
+		// 同步刷新缓存中的已读状态
+		for i := range rspList {
+			if rspList[i].SendId == userTwoId {
+				rspList[i].ReadStatus = 1
+			}
+		}
+		// 第一页写缓存（TTL 1 分钟，发送消息时主动失效）
+		rspByte, err := json.Marshal(rspList)
+		if err == nil {
+			if err := myredis.SetKeyEx(cacheKey, string(rspByte), time.Minute*constants.REDIS_TIMEOUT); err != nil {
+				zlog.Error(err.Error())
+			}
+		}
+	}
+	return "获取聊天记录成功", rspList, 0
+}
+
+// GetGroupMessageList 获取群聊消息记录（游标分页）
+// limit 默认 50 最大 100；beforeId>0 时返回 id<beforeId 的最近 limit 条（上翻页）
+func (m *messageService) GetGroupMessageList(groupId string, limit int, beforeId int64) (string, []respond.GetGroupMessageListRespond, int) {
+	limit = normalizePageLimit(limit)
+	// 仅第一页（无游标）走缓存
+	cacheKey := "group_messagelist_" + groupId
+	if beforeId <= 0 {
+		rspString, err := myredis.GetKeyNilIsErr(cacheKey)
+		if err == nil {
+			var rsp []respond.GetGroupMessageListRespond
+			if err := json.Unmarshal([]byte(rspString), &rsp); err != nil {
+				zlog.Error(err.Error())
+			}
+			return "获取聊天记录成功", rsp, 0
+		} else if !errors.Is(err, redis.Nil) {
+			zlog.Error(err.Error())
+		}
+	}
+
+	var messageList []model.Message
+	query := dao.GormDB.Where("receive_id = ?", groupId).Order("created_at DESC, id DESC")
+	if beforeId > 0 {
+		query = query.Where("id < ?", beforeId)
+	}
+	if res := query.Limit(limit).Find(&messageList); res.Error != nil {
+		zlog.Error(res.Error.Error())
+		return constants.SYSTEM_ERROR, nil, -1
+	}
+
+	var rspList []respond.GetGroupMessageListRespond
+	for _, message := range messageList {
+		rspList = append(rspList, respond.GetGroupMessageListRespond{
+			Id:            message.Id,
+			SendId:        message.SendId,
+			SendName:      message.SendName,
+			SendAvatar:    message.SendAvatar,
+			ReceiveId:     message.ReceiveId,
+			Content:       message.Content,
+			Url:           message.Url,
+			Type:          message.Type,
+			FileType:      message.FileType,
+			FileName:      message.FileName,
+			FileSize:      message.FileSize,
+			FileSizeBytes: message.FileSizeBytes,
+			CreatedAt:     message.CreatedAt.Format("2006-01-02 15:04:05"),
+		})
+	}
+	// 倒序查询后反转回正序
+	for i, j := 0, len(rspList)-1; i < j; i, j = i+1, j-1 {
+		rspList[i], rspList[j] = rspList[j], rspList[i]
+	}
+
+	// 第一页写缓存
+	if beforeId <= 0 {
+		rspByte, err := json.Marshal(rspList)
+		if err == nil {
+			if err := myredis.SetKeyEx(cacheKey, string(rspByte), time.Minute*constants.REDIS_TIMEOUT); err != nil {
+				zlog.Error(err.Error())
+			}
+		}
+	}
+	return "获取聊天记录成功", rspList, 0
 }
 
 // UploadFileResponse 上传响应（P1 修复：返回服务端文件名和下载 URL）
@@ -311,4 +387,29 @@ func (m *messageService) UploadFile(c *gin.Context) (string, interface{}, int) {
 		return "上传成功", rsp, 0
 	}
 	return "上传成功", nil, 0
+}
+
+// RevokeMessage 撤回消息（仅发送者本人，软删除）
+func (m *messageService) RevokeMessage(ownerId, messageUuid string) (string, int) {
+	var message model.Message
+	if res := dao.GormDB.Where("uuid = ?", messageUuid).First(&message); res.Error != nil {
+		zlog.Error(res.Error.Error())
+		return "消息不存在", -2
+	}
+	if message.SendId != ownerId {
+		return "无权撤回他人消息", -2
+	}
+	// 软删除：历史查询自动过滤
+	if res := dao.GormDB.Delete(&message); res.Error != nil {
+		zlog.Error(res.Error.Error())
+		return constants.SYSTEM_ERROR, -1
+	}
+	// 失效相关历史缓存
+	if message.ReceiveId[0] == 'U' {
+		_ = myredis.DelKeysWithPattern("message_list_" + message.SendId + "_" + message.ReceiveId)
+		_ = myredis.DelKeysWithPattern("message_list_" + message.ReceiveId + "_" + message.SendId)
+	} else {
+		_ = myredis.DelKeysWithPattern("group_messagelist_" + message.ReceiveId)
+	}
+	return "撤回成功", 0
 }

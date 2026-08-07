@@ -1,11 +1,13 @@
-package chat
+﻿package chat
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/go-redis/redis/v8"
+	"gorm.io/gorm"
 	"kama_chat_server/internal/dao"
 	"kama_chat_server/internal/dto/request"
 	"kama_chat_server/internal/dto/respond"
@@ -16,6 +18,8 @@ import (
 	"kama_chat_server/pkg/enum/message/message_type_enum"
 	"kama_chat_server/pkg/util/random"
 	"kama_chat_server/pkg/zlog"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -36,6 +40,41 @@ type MessageProcessor struct {
 }
 
 const cacheTaskQueueSize = 2048
+
+// maxAVDataSize av_data(WebRTC 信令)长度上限：信令是瞬时数据，超过 64KB 视为异常拒绝
+const maxAVDataSize = 64 * 1024
+
+// parseFileSize 解析文件大小展示字符串为字节数（如 "1.5MB" → 1572864）
+// 支持纯数字（视为字节）、KB/MB/GB 后缀；解析失败返回 0
+func parseFileSize(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	// 纯数字 → 字节
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return n
+	}
+	// 带单位后缀
+	suffixes := []struct {
+		suffix string
+		mult   int64
+	}{
+		{"GB", 1024 * 1024 * 1024},
+		{"MB", 1024 * 1024},
+		{"KB", 1024},
+		{"B", 1},
+	}
+	for _, sf := range suffixes {
+		if strings.HasSuffix(strings.ToUpper(s), sf.suffix) {
+			numPart := strings.TrimSpace(s[:len(s)-len(sf.suffix)])
+			if f, err := strconv.ParseFloat(numPart, 64); err == nil {
+				return int64(f * float64(sf.mult))
+			}
+		}
+	}
+	return 0
+}
 
 // NewMessageProcessor 创建消息处理器
 func NewMessageProcessor(clients map[string]*Client, mutex *sync.RWMutex) *MessageProcessor {
@@ -156,21 +195,26 @@ func (mp *MessageProcessor) processText(ctx context.Context, chatMessageReq requ
 // processFile 处理文件消息
 func (mp *MessageProcessor) processFile(ctx context.Context, chatMessageReq request.ChatMessageRequest, waitForPersistence bool) error {
 	message := model.Message{
-		Uuid:       fmt.Sprintf("M%s", random.GetNowAndLenRandomString(11)),
-		SessionId:  chatMessageReq.SessionId,
-		Type:       chatMessageReq.Type,
-		Content:    "",
-		Url:        chatMessageReq.Url,
-		SendId:     chatMessageReq.SendId,
-		SendName:   chatMessageReq.SendName,
-		SendAvatar: chatMessageReq.SendAvatar,
-		ReceiveId:  chatMessageReq.ReceiveId,
-		FileSize:   chatMessageReq.FileSize,
-		FileType:   chatMessageReq.FileType,
-		FileName:   chatMessageReq.FileName,
-		Status:     message_status_enum.Unsent,
-		CreatedAt:  time.Now(),
-		AVdata:     "",
+		Uuid:          fmt.Sprintf("M%s", random.GetNowAndLenRandomString(11)),
+		SessionId:     chatMessageReq.SessionId,
+		Type:          chatMessageReq.Type,
+		Content:       "",
+		Url:           chatMessageReq.Url,
+		SendId:        chatMessageReq.SendId,
+		SendName:      chatMessageReq.SendName,
+		SendAvatar:    chatMessageReq.SendAvatar,
+		ReceiveId:     chatMessageReq.ReceiveId,
+		FileSize:      chatMessageReq.FileSize,
+		FileSizeBytes: chatMessageReq.FileSizeBytes,
+		FileType:      chatMessageReq.FileType,
+		FileName:      chatMessageReq.FileName,
+		Status:        message_status_enum.Unsent,
+		CreatedAt:     time.Now(),
+		AVdata:        "",
+	}
+	// FileSizeBytes 未传时尝试解析展示字符串（如 "1.5MB" → 1572864）
+	if message.FileSizeBytes <= 0 && message.FileSize != "" {
+		message.FileSizeBytes = parseFileSize(message.FileSize)
 	}
 	message.SendAvatar = normalizePath(message.SendAvatar)
 	if err := mp.persistMessage(ctx, &message, waitForPersistence); err != nil {
@@ -190,6 +234,10 @@ func (mp *MessageProcessor) processFile(ctx context.Context, chatMessageReq requ
 
 // processAudioOrVideo 处理音视频通话信令
 func (mp *MessageProcessor) processAudioOrVideo(ctx context.Context, chatMessageReq request.ChatMessageRequest, waitForPersistence bool) error {
+	// 信令是瞬时数据：超长 payload 视为异常，拒绝处理
+	if len(chatMessageReq.AVdata) > maxAVDataSize {
+		return fmt.Errorf("av_data exceeds %d bytes limit", maxAVDataSize)
+	}
 	var avData request.AVData
 	if err := json.Unmarshal([]byte(chatMessageReq.AVdata), &avData); err != nil {
 		return fmt.Errorf("parse audio/video payload: %w", err)
@@ -233,12 +281,13 @@ func (mp *MessageProcessor) processAudioOrVideo(ctx context.Context, chatMessage
 			ReceiveId:  message.ReceiveId,
 			Type:       message.Type,
 			Content:    message.Content,
-			Url:        message.Url,
-			FileSize:   message.FileSize,
-			FileName:   message.FileName,
-			FileType:   message.FileType,
-			CreatedAt:  message.CreatedAt.Format("2006-01-02 15:04:05"),
-			AVdata:     message.AVdata,
+			Url:           message.Url,
+			FileSize:      message.FileSize,
+			FileSizeBytes: message.FileSizeBytes,
+			FileName:      message.FileName,
+			FileType:      message.FileType,
+			CreatedAt:     message.CreatedAt.Format("2006-01-02 15:04:05"),
+			AVdata:        message.AVdata,
 		}
 		jsonMessage, err := json.Marshal(messageRsp)
 		if err != nil {
@@ -343,12 +392,8 @@ func (mp *MessageProcessor) forwardToGroup(message model.Message, rawAvatar stri
 	}
 
 	// 查群成员列表
-	var group model.GroupInfo
-	if res := dao.GormDB.Where("uuid = ?", message.ReceiveId).First(&group); res.Error != nil {
-		zlog.Error(res.Error.Error())
-	}
-	var members []string
-	if err := json.Unmarshal(group.Members, &members); err != nil {
+	members, err := getActiveGroupMemberIDs(message.ReceiveId)
+	if err != nil {
 		zlog.Error(err.Error())
 	}
 
@@ -385,29 +430,96 @@ func (mp *MessageProcessor) getClient(uuid string) *Client {
 
 // updateUserMessageCache 更新私聊消息 Redis 缓存
 func (mp *MessageProcessor) updateUserMessageCache(message model.Message, messageRsp respond.GetMessageListRespond) {
-	key := "message_list_" + message.SendId + "_" + message.ReceiveId
-	rspString, err := myredis.GetKeyNilIsErr(key)
-	if err == nil {
-		var rsp []respond.GetMessageListRespond
-		if err := json.Unmarshal([]byte(rspString), &rsp); err != nil {
-			zlog.Error(err.Error())
+	// 双向缓存 key 都更新：发送方视角和接收方视角各存一份
+	keys := []string{
+		"message_list_" + message.SendId + "_" + message.ReceiveId,
+		"message_list_" + message.ReceiveId + "_" + message.SendId,
+	}
+	for _, key := range keys {
+		rspString, err := myredis.GetKeyNilIsErr(key)
+		if err == nil {
+			var rsp []respond.GetMessageListRespond
+			if err := json.Unmarshal([]byte(rspString), &rsp); err != nil {
+				zlog.Error(err.Error())
+			}
+			rsp = append(rsp, messageRsp)
+			rspByte, err := json.Marshal(rsp)
+			if err != nil {
+				zlog.Error(err.Error())
+			}
+			if err := myredis.SetKeyEx(key, string(rspByte), time.Minute*constants.REDIS_TIMEOUT); err != nil {
+				zlog.Error(err.Error())
+			}
+		} else {
+			if !errors.Is(err, redis.Nil) {
+				zlog.Error(err.Error())
+			}
 		}
-		rsp = append(rsp, messageRsp)
-		rspByte, err := json.Marshal(rsp)
-		if err != nil {
-			zlog.Error(err.Error())
+	}
+	// 同步更新双方 session 的最近消息摘要
+	updateSessionLastMessage(message.SendId, message.ReceiveId, message)
+	updateSessionLastMessage(message.ReceiveId, message.SendId, message)
+}
+
+// updateSessionLastMessage 更新某个视角(sendId 视角)的 session 最近消息摘要
+// 单聊：双方各自持有自己的 session 记录（send_id=创建者视角）
+// 已存在则更新摘要，不存在则自动创建（保证消息投递后列表页摘要不为空）
+func updateSessionLastMessage(sendId, receiveId string, message model.Message) {
+	now := time.Now()
+	var session model.Session
+	res := dao.GormDB.Where("send_id = ? AND receive_id = ?", sendId, receiveId).First(&session)
+	if res.Error != nil {
+		if errors.Is(res.Error, gorm.ErrRecordNotFound) {
+			// 会话不存在：查询对方名称头像后自动创建摘要记录
+			receiveName, avatar := lookupReceiveInfo(receiveId)
+			session = model.Session{
+				Uuid:          fmt.Sprintf("S%s", random.GetNowAndLenRandomString(11)),
+				SendId:        sendId,
+				ReceiveId:     receiveId,
+				ReceiveName:   receiveName,
+				Avatar:        avatar,
+				LastMessage:   message.Content,
+				LastMessageAt: sql.NullTime{Time: now, Valid: true},
+				CreatedAt:     now,
+			}
+			if err := dao.GormDB.Create(&session).Error; err != nil {
+				zlog.Error("自动创建 session 摘要失败: " + err.Error())
+			}
+			return
 		}
-		if err := myredis.SetKeyEx(key, string(rspByte), time.Minute*constants.REDIS_TIMEOUT); err != nil {
-			zlog.Error(err.Error())
-		}
-	} else {
-		if !errors.Is(err, redis.Nil) {
-			zlog.Error(err.Error())
-		}
+		zlog.Error("查询 session 失败: " + res.Error.Error())
+		return
+	}
+	if res := dao.GormDB.Model(&model.Session{}).
+		Where("send_id = ? AND receive_id = ?", sendId, receiveId).
+		Updates(map[string]interface{}{
+			"last_message":    message.Content,
+			"last_message_at": now,
+		}); res.Error != nil {
+		zlog.Error("更新 session 最近消息失败: " + res.Error.Error())
 	}
 }
 
-// updateGroupMessageCache 更新群聊消息 Redis 缓存
+// lookupReceiveInfo 查询接收方名称和头像（U=用户，G=群）
+func lookupReceiveInfo(receiveId string) (string, string) {
+	if receiveId == "" {
+		return "", ""
+	}
+	if receiveId[0] == 'U' {
+		var u model.UserInfo
+		if res := dao.GormDB.Where("uuid = ?", receiveId).First(&u); res.Error == nil {
+			return u.Nickname, u.Avatar
+		}
+	} else {
+		var g model.GroupInfo
+		if res := dao.GormDB.Where("uuid = ?", receiveId).First(&g); res.Error == nil {
+			return g.Name, g.Avatar
+		}
+	}
+	return "", ""
+}
+
+// updateGroupMessageCache 更新群聊消息 Redis 缓存 + 发送者群会话摘要
 func (mp *MessageProcessor) updateGroupMessageCache(message model.Message, messageRsp respond.GetGroupMessageListRespond) {
 	key := "group_messagelist_" + message.ReceiveId
 	rspString, err := myredis.GetKeyNilIsErr(key)
@@ -429,4 +541,6 @@ func (mp *MessageProcessor) updateGroupMessageCache(message model.Message, messa
 			zlog.Error(err.Error())
 		}
 	}
+	// 更新发送者视角的群会话摘要（其他成员会话在各自发送/打开时回填）
+	updateSessionLastMessage(message.SendId, message.ReceiveId, message)
 }

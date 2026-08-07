@@ -1,4 +1,4 @@
-package chat
+﻿package chat
 
 import (
 	"encoding/json"
@@ -183,8 +183,8 @@ func (k *KafkaServer) Start() {
 					if res := dao.GormDB.Where("uuid = ?", message.ReceiveId).First(&group); res.Error != nil {
 						zlog.Error(res.Error.Error())
 					}
-					var members []string
-					if err := json.Unmarshal(group.Members, &members); err != nil {
+					members, err := getActiveGroupMemberIDs(message.ReceiveId)
+					if err != nil {
 						zlog.Error(err.Error())
 					}
 					var targets []*Client
@@ -328,8 +328,8 @@ func (k *KafkaServer) Start() {
 					if res := dao.GormDB.Where("uuid = ?", message.ReceiveId).First(&group); res.Error != nil {
 						zlog.Error(res.Error.Error())
 					}
-					var members []string
-					if err := json.Unmarshal(group.Members, &members); err != nil {
+					members, err := getActiveGroupMemberIDs(message.ReceiveId)
+					if err != nil {
 						zlog.Error(err.Error())
 					}
 					var targets []*Client

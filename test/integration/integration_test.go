@@ -156,14 +156,14 @@ func TestAutoMigrate(t *testing.T) {
 		t.Fatalf("数据库初始化失败: %v", err)
 	}
 
-	// 验证所有表存在
-	tables := []string{"user_info", "group_info", "user_contact", "session", "contact_apply", "message"}
+	// 验证所有表存在（按当前数据库过滤，避免 sys.session 等系统表干扰）
+	tables := []string{"user_info", "group_info", "group_member", "user_contact", "session", "contact_apply", "message"}
 	for _, table := range tables {
 		var count int64
-		dao.GormDB.Raw(fmt.Sprintf("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '%s'", table)).Scan(&count)
+		dao.GormDB.Raw(fmt.Sprintf("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '%s'", table)).Scan(&count)
 		if count != 1 {
 			t.Errorf("表 %s 不存在", table)
 		}
 	}
-	t.Log("所有 6 张表 AutoMigrate 验证通过")
+	t.Log("所有 7 张表 AutoMigrate 验证通过")
 }

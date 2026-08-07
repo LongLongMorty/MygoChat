@@ -52,6 +52,26 @@ var queuedDeliveryStatuses sync.Map
 
 func init() {
 	go flushDeliveryStatuses()
+	go reconcileUnconfirmedDeliveries()
+}
+
+// reconcileUnconfirmedDeliveries 兜底：定期将长时间未收到客户端确认的消息置为已发送
+// 消息已在服务端持久化（落库即视为送达），客户端断线/不确认不应让 status 永远停留在未发送
+func reconcileUnconfirmedDeliveries() {
+	// 每 30 秒扫描一次，5 分钟前未确认的消息统一置为已发送
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		if dao.GormDB == nil {
+			continue
+		}
+		cutoff := time.Now().Add(-5 * time.Minute)
+		if res := dao.GormDB.Model(&model.Message{}).
+			Where("status = ? AND created_at < ?", message_status_enum.Unsent, cutoff).
+			Update("status", message_status_enum.Sent); res.Error != nil {
+			zlog.Error("确认兜底扫描失败: " + res.Error.Error())
+		}
+	}
 }
 
 func enqueueDeliveryStatus(uuid string) {

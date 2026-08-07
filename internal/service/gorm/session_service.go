@@ -69,6 +69,16 @@ func (s *sessionService) CreateSession(req request.CreateSessionRequest) (string
 		zlog.Error(res.Error.Error())
 		return constants.SYSTEM_ERROR, "", -1
 	}
+	// 懒创建会话时回填最近一条消息摘要，避免列表页摘要为空
+	var latest model.Message
+	if res := dao.GormDB.
+		Where("(send_id = ? AND receive_id = ?) OR (send_id = ? AND receive_id = ?)", req.SendId, req.ReceiveId, req.ReceiveId, req.SendId).
+		Order("id DESC").First(&latest); res.Error == nil {
+		dao.GormDB.Model(&session).Updates(map[string]interface{}{
+			"last_message":    latest.Content,
+			"last_message_at": latest.CreatedAt,
+		})
+	}
 	if err := myredis.DelKeysWithPattern("group_session_list_" + req.SendId); err != nil {
 		zlog.Error(err.Error())
 	}

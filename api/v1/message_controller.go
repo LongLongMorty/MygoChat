@@ -51,8 +51,22 @@ func GetMessageList(c *gin.Context) {
 		return
 	}
 
-	message, rsp, ret := gorm.MessageService.GetMessageList(req.UserOneId, req.UserTwoId)
+	message, rsp, ret := gorm.MessageService.GetMessageList(req.UserOneId, req.UserTwoId, req.Limit, req.BeforeId)
 	JsonBack(c, message, ret, rsp)
+}
+
+// RevokeMessage 撤回消息（仅发送者本人）
+func RevokeMessage(c *gin.Context) {
+	var req request.RevokeMessageRequest
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    500,
+			"message": constants.SYSTEM_ERROR,
+		})
+		return
+	}
+	message, ret := gorm.MessageService.RevokeMessage(c.GetString("uuid"), req.MessageUuid)
+	JsonBack(c, message, ret, nil)
 }
 
 // GetGroupMessageList 获取群聊消息记录
@@ -83,7 +97,7 @@ func GetGroupMessageList(c *gin.Context) {
 		return
 	}
 
-	message, rsp, ret := gorm.MessageService.GetGroupMessageList(req.GroupId)
+	message, rsp, ret := gorm.MessageService.GetGroupMessageList(req.GroupId, req.Limit, req.BeforeId)
 	JsonBack(c, message, ret, rsp)
 }
 
