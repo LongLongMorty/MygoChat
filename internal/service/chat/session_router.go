@@ -77,6 +77,38 @@ func (sr *SessionRouter) EnqueueMessageAndWait(ctx context.Context, envelopeData
 	}
 }
 
+// EnqueueMessagesAndWait is used by the Kafka batch path. It enqueues a batch
+// of messages (each carrying its own done channel) and waits until ALL of them
+// have been processed & persisted. Ordering per session is preserved by the
+// SessionQueue worker; different sessions process concurrently on their own
+// goroutines. On any single failure it returns the first error, and the caller
+// must retry the whole batch (seq-based dedup in the session worker makes
+// re-processing already-delivered messages idempotent).
+func (sr *SessionRouter) EnqueueMessagesAndWait(ctx context.Context, envelopeDatas [][]byte) error {
+	dones := make([]chan error, len(envelopeDatas))
+	for i, data := range envelopeDatas {
+		done := make(chan error, 1)
+		if err := sr.enqueue(ctx, data, done); err != nil {
+			return err
+		}
+		dones[i] = done
+	}
+	// Wait for all done channels. Bail on the first error so the caller can
+	// retry the batch from the last committed offset.
+	for _, done := range dones {
+		select {
+		case err := <-done:
+			if err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			ChatMetrics.sessionQueueTimeouts.Add(1)
+			return fmt.Errorf("wait for session batch processing: %w", ctx.Err())
+		}
+	}
+	return nil
+}
+
 func (sr *SessionRouter) enqueue(ctx context.Context, envelopeData []byte, done chan error) error {
 	item, sessionId, err := parseQueuedEnvelope(envelopeData, done, ctx)
 	if err != nil {

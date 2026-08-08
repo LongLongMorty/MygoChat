@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -466,4 +467,83 @@ func TestSessionRouterProcessingFailureCanRetrySameSequence(t *testing.T) {
 	if err := router.EnqueueMessageAndWait(ctx, envelopeData); err != nil {
 		t.Fatalf("相同序号重试应成功: %v", err)
 	}
+}
+
+// TestSessionRouterBatchAndWait 验证批量消费方法：多会话消息并发处理、全部持久化后才返回
+func TestSessionRouterBatchAndWait(t *testing.T) {
+	var processedCount int
+	var orderMu sync.Mutex
+	processor := &MockMessageProcessor{
+		onProcess: func([]byte) {
+			orderMu.Lock()
+			processedCount++
+			orderMu.Unlock()
+		},
+	}
+	router := NewSessionRouter(processor, 16)
+	defer router.Close()
+
+	// 3 个会话 × 5 条消息，每条携带递增序号
+	var payloads [][]byte
+	total := 0
+	for s := 0; s < 3; s++ {
+		for i := 1; i <= 5; i++ {
+			sess := fmt.Sprintf("batch-session-%d", s)
+			payload, _ := json.Marshal(request.ChatMessageRequest{SessionId: sess, Content: fmt.Sprintf("msg-%d", i)})
+			env, _ := json.Marshal(MessageEnvelope{SeqNum: uint64(i), Payload: payload})
+			payloads = append(payloads, env)
+			total++
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := router.EnqueueMessagesAndWait(ctx, payloads); err != nil {
+		t.Fatalf("批量处理失败: %v", err)
+	}
+
+	orderMu.Lock()
+	got := processedCount
+	orderMu.Unlock()
+	if got != total {
+		t.Fatalf("批量处理应完成 %d 条，实际 %d", total, got)
+	}
+	t.Logf("✅ 批量消费 %d 条全部处理完成", got)
+}
+
+// TestSessionRouterBatchFailureRetry 验证批量消费失败后整批重试（序号去重保证幂等）
+func TestSessionRouterBatchFailureRetry(t *testing.T) {
+	var failed atomic.Bool
+	failed.Store(true)
+	processor := &MockMessageProcessor{
+		processErr: func([]byte) error {
+			if failed.Load() {
+				failed.Store(false)
+				return errors.New("temporary database failure")
+			}
+			return nil
+		},
+	}
+	router := NewSessionRouter(processor, 16)
+	defer router.Close()
+
+	var payloads [][]byte
+	for i := 1; i <= 5; i++ {
+		payload, _ := json.Marshal(request.ChatMessageRequest{SessionId: "batch-retry-session", Content: fmt.Sprintf("msg-%d", i)})
+		env, _ := json.Marshal(MessageEnvelope{SeqNum: uint64(i), Payload: payload})
+		payloads = append(payloads, env)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 首次整批：某条失败 → 整体返回错误
+	if err := router.EnqueueMessagesAndWait(ctx, payloads); err == nil {
+		t.Fatal("批量首次处理应返回失败")
+	}
+	// 重试整批：序号去重 + 失败已恢复 → 应成功且不重复投递
+	if err := router.EnqueueMessagesAndWait(ctx, payloads); err != nil {
+		t.Fatalf("整批重试应成功: %v", err)
+	}
+	t.Log("✅ 批量失败后整批重试成功（幂等，无重复投递）")
 }

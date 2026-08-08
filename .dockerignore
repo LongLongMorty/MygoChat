@@ -1,0 +1,17 @@
+# 构建上下文排除：避免无关大目录拖慢/污染镜像
+.git
+.idea
+.opencode
+.cache
+*.log
+logs/
+docs/
+test/
+web/
+node_modules
+dist
+kama_chat_server.exe
+performance.exe
+*.exe
+docker-compose.yml
+README.md

@@ -14,10 +14,11 @@ Client → WebSocket → HybridRouter ─┬─ Channel (正常路径, ~0.6ms P5
                                           └─ Consumer → SessionQueue → Client
 ```
 
-- **Channel 模式**：消息通过内存 channel 直接投递，延迟极低（P50 ~0.6ms）
+- **Channel 模式**：消息通过内存 channel 直接投递，延迟极低（P50 毫秒级）
 - **背压检测**：监控 channel 深度，超过阈值（CHANNEL_SIZE × 4/5）持续 5 秒自动进入 overflow 模式
-- **Kafka 分流**：overflow 模式下的消息路由到 Kafka 队列，消费者异步排空后投递到 WebSocket 客户端
+- **Kafka 分流**：overflow 模式下的消息路由到 Kafka 队列，消费者批量拉取 + 批量提交 offset，异步排空后投递到 WebSocket 客户端
 - **零丢失恢复**：三轮 CHANNEL_SIZE=100 强制溢出测试验证，10000 条消息 100% 投递，gaps=0
+- **非阻塞背压**：`sendToChannel` 用 `select+default`，Channel 满立即分流 Kafka，发送方不阻塞、不丢
 
 ### 三层路由架构
 
@@ -32,10 +33,16 @@ HybridRouter
   │     ├── 连续 5 次超阈值 → overflowMode = true
   │     └── 连续 5 次低阈值 → overflowMode = false
   └── KafkaConsumer
-        ├── FetchMessage（不自动提交）
-        ├── SessionRouter 处理成功后 CommitMessages
-        └── 失败重试同一 offset（3 次后退避）
+        ├── 批量 FetchMessage（不自动提交）
+        ├── 批量 EnqueueMessagesAndWait（逐条持久化确认）
+        ├── 批量 CommitMessages
+        └── 失败重试整批（3 次后退避）
 ```
+
+### 可观测性
+
+- **pprof**：服务器 8091 端口暴露 `/debug/pprof/`（goroutine/heap/profile），压测期间可采样系统资源，佐证稳定性
+- **容器化**：`Dockerfile`（vendor 离线构建 + tzdata 内嵌）+ `docker-compose` server 服务限 2C4G，支持受限环境压测
 
 ### 性能测试框架
 
@@ -69,6 +76,22 @@ HybridRouter
 | Burst | 20u×200@0/s | 100% | **78ms** | **112ms** | 100% Ch |
 | 顺序保证 | 2u×200@0/s | 100% | **16ms** | **24ms** | gaps=0 |
 
+### 单机 2C4G 容器压测（5000 QPS 积压）
+
+> 环境：服务器容器限制 **2 核 / 4GB**（`deploy.resources.limits`），详见 [docs/2c4g-performance-test-plan.md](docs/2c4g-performance-test-plan.md)。
+
+| 指标 | 值 |
+|------|-----|
+| 发送 / 收到 / 持久化 | **5000 / 5000 / 5000（100%）** |
+| 吞吐 | **4988 msg/s** |
+| P50 / P95 / P99 | **1.62ms / 2.63ms / 3.33ms** |
+| duplicates / gaps | **0 / 0** |
+| queue timeouts | **0 / 0** |
+| pprof goroutine / 内存 | 27 恒定无泄漏 / 压测后回落 |
+
+> **2C4G 受限容器下 5000 QPS 积压测试实现 0 丢包、0 乱序、0 重复，系统稳定不崩溃**
+> （pprof 佐证无 goroutine/内存泄漏）。Channel 常态直送 P50 毫秒级；背压 `select+default` 溢出分流 Kafka 兜底不丢。
+
 ### Kafka 溢出恢复（CHANNEL_SIZE=100，强制溢出）
 
 | 轮次 | 通道 | Kafka | 总投递 | Gaps | 失败计数器 | 完成 |
@@ -78,6 +101,8 @@ HybridRouter
 | R3 | 304 | 9696 | 10000 | 0 | 全 0 | ✅ |
 
 > 三轮全部 `completed=true`, `gaps=0, duplicates=0`, `kafka_lag_checked=true`, `kafka_consumer_lag=0`, `persistence_checked=true`, `metrics_collected=true`
+
+> **延迟口径**：溢出测试验证的是**零丢失可靠性**（Kafka 作兜底通道），非性能路径。Kafka 端到端排空耗时约 490s（消费者单线程逐条落库，有效吞吐约 19 msg/s）——正常负载 100% 走 Channel（P50 < 2ms），溢出时消息由 Kafka 兜底保证不丢，这是明确的设计取舍（详见 `test/performance/results/results.md`）。
 
 ## 功能特性
 

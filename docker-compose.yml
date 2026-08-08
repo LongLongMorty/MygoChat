@@ -1,6 +1,10 @@
 # KamaChat 开发与集成测试环境
-# 使用：docker-compose up -d
+# 使用：docker compose up -d
 # 集成测试：KAMA_INTEGRATION_TEST=1 go test ./test/integration/...
+#
+# 单机容器压测环境（2 核 4G 约束）：
+#   - server 服务通过 deploy.resources.limits 限制为 2 核 / 4GB
+#   - 依赖服务（mysql/redis/kafka）也纳入 2C4G 约束内，贴近真实资源受限场景
 
 services:
   mysql:
@@ -19,6 +23,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 1G
 
   redis:
     image: redis:7-alpine
@@ -32,6 +41,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 512M
 
   kafka:
     image: apache/kafka:3.7.0
@@ -42,7 +56,10 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://127.0.0.1:9092
+      # advertised listener 用服务名 kafka:9092，容器间访问（server 容器）可达；
+      # 宿主机访问 127.0.0.1:9092 由端口映射提供，但 broker 会返回 kafka:9092，
+      # 因此压测时 ws_load 若需查 lag 应跳过 kafka 参数或改为容器内执行。
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       # Single-broker KRaft needs single-replica internal topics; the defaults
@@ -60,7 +77,56 @@ services:
       interval: 15s
       timeout: 5s
       retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+
+  # 应用服务器：容器化并限制为 2 核 4G（单机受限环境压测）
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kamachat-server
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      KAMA_JWT_SECRET: "KamaChat-JWT-Secret-Key-For-Demo-2026-0123456789"
+      # 容器内通过服务名访问依赖（覆盖 config.toml 的 127.0.0.1 默认值）
+      KAMA_MYSQL_HOST: mysql
+      KAMA_MYSQL_PORT: "3306"
+      KAMA_MYSQL_USER: root
+      KAMA_MYSQL_PASSWORD: root
+      KAMA_MYSQL_DB: kama_chat_server
+      KAMA_REDIS_HOST: redis
+      KAMA_REDIS_PORT: "6379"
+      KAMA_KAFKA_BROKER: kafka:9092
+      # 压测可临时切换：channel / kafka / hybrid
+      KAMA_KAFKA_MESSAGE_MODE: hybrid
+      # 容器内绑定 0.0.0.0，Docker 端口映射才能从宿主机访问 8000
+      KAMA_MAIN_HOST: "0.0.0.0"
+      # pprof 调试级别
+      KAMA_LOG_LEVEL: info
+    ports:
+      - "8000:8000"   # 业务 HTTPS
+      - "8091:8091"   # pprof
+    volumes:
+      - server_logs:/app/logs
+      - server_static:/app/static
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
 
 volumes:
   mysql_data:
   redis_data:
+  server_logs:
+  server_static:

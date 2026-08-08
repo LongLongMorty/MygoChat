@@ -32,8 +32,17 @@ type user struct {
 	UUID      string `json:"uuid"`
 	Nickname  string `json:"nickname"`
 	Token     string `json:"token"`
+	Email     string `json:"email,omitempty"`
 	Telephone string `json:"telephone,omitempty"`
 	Password  string `json:"password,omitempty"`
+}
+
+// loginID 返回登录凭证（优先 email，回退 telephone）——当前系统 login 接口以 email 为主
+func (u *user) loginID() string {
+	if u.Email != "" {
+		return u.Email
+	}
+	return u.Telephone
 }
 
 type message struct {
@@ -356,13 +365,20 @@ func authenticateUsers(users []user, wsURL string) []user {
 		if users[i].Token != "" {
 			continue
 		}
-		if users[i].Telephone == "" || users[i].Password == "" {
-			log.Fatal("every user needs a token or telephone/password credentials")
+		if users[i].loginID() == "" || users[i].Password == "" {
+			log.Fatal("every user needs a token or email/telephone/password credentials")
 		}
-		body, _ := json.Marshal(map[string]string{"telephone": users[i].Telephone, "password": users[i].Password})
+		// 当前 login 接口接受 email；若只有 telephone 则复用 telephone 字段值作为 email 登录
+		loginReq := map[string]string{"password": users[i].Password}
+		if users[i].Email != "" {
+			loginReq["email"] = users[i].Email
+		} else {
+			loginReq["email"] = users[i].Telephone
+		}
+		body, _ := json.Marshal(loginReq)
 		response, err := httpClient.Post(endpoint.String(), "application/json", bytes.NewReader(body))
 		if err != nil {
-			log.Fatalf("login %s: %v", users[i].Telephone, err)
+			log.Fatalf("login %s: %v", users[i].loginID(), err)
 		}
 		var payload struct {
 			Code    int    `json:"code"`
@@ -372,7 +388,7 @@ func authenticateUsers(users []user, wsURL string) []user {
 		err = json.NewDecoder(response.Body).Decode(&payload)
 		response.Body.Close()
 		if err != nil || (payload.Code != 0 && payload.Code != http.StatusOK) || payload.Data.Token == "" {
-			log.Fatalf("login %s failed: %s (%v)", users[i].Telephone, payload.Message, err)
+			log.Fatalf("login %s failed: %s (%v)", users[i].loginID(), payload.Message, err)
 		}
 		users[i].UUID = payload.Data.UUID
 		users[i].Token = payload.Data.Token

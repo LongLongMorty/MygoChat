@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	_ "net/http/pprof" // pprof 性能剖析（独立端口 8091）
+	_ "time/tzdata"    // 内嵌时区数据：容器内无需系统 tzdata 文件，日志时间正确
 	"kama_chat_server/internal/config"
 	"kama_chat_server/internal/dao"
 	"kama_chat_server/internal/https_server"
@@ -56,6 +59,16 @@ func main() {
 		if err := https_server.GE.RunTLS(fmt.Sprintf("%s:%d", host, port), "pkg/ssl/server.crt", "pkg/ssl/server.key"); err != nil {
 			zlog.Fatal("server running fault")
 			return
+		}
+	}()
+
+	// P2-2: pprof 性能剖析独立端口（压测期间可采集 CPU/内存/goroutine）
+	// 访问：/debug/pprof/{profile,heap,goroutine}
+	go func() {
+		zlog.Info("pprof 服务已启动: http://127.0.0.1:8091/debug/pprof/")
+		// 监听所有接口（:8091），容器内 Docker 端口映射才能从宿主机访问
+		if err := http.ListenAndServe(":8091", nil); err != nil {
+			zlog.Error("pprof 服务启动失败: " + err.Error())
 		}
 	}()
 

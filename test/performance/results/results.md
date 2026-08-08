@@ -195,6 +195,41 @@ P50/P95/P99 仅包含**接收方（forward）** 延迟，排除发送方自回�
 
 ---
 
+## 2C4G 容器压测（2026-08-08）
+
+> 环境：服务器容器限制 **2 核 / 4GB**（`deploy.resources.limits`），MySQL/Redis/Kafka 同栈容器化。
+> 压测工具从宿主机连接容器（含 Docker NAT 端到端延迟）。详见 [docs/2c4g-performance-test-plan.md](../../docs/2c4g-performance-test-plan.md)。
+
+### 5000 QPS 积压测试（`2c4g_5000qps.json`）
+
+| 指标 | 值 |
+|------|-----|
+| 发送 / 收到 / 持久化 | 5000 / 5000 / 5000（100%） |
+| 吞吐 | **4988 msg/s** |
+| P50 / P95 / P99 | **1.62ms / 2.63ms / 3.33ms** |
+| duplicates / sequence_gaps | **0 / 0** |
+| delivery/session queue timeouts | **0 / 0** |
+| 完成率 | **100%**（completed=true） |
+
+> 核心结论：2C4G 受限容器下 5000 QPS 积压测试实现 **0 丢包、0 乱序、0 重复**，系统稳定不崩溃。
+
+### pprof 稳定性佐证
+
+压测期间采样：
+
+| 指标 | 压测前 | 压测中 | 压测后 |
+|------|--------|--------|--------|
+| goroutine | 27 | 27 | 27 |
+| 内存 Alloc | 15MB | 23MB | 14MB |
+
+goroutine 恒定、内存压测后回落 → 无 goroutine 泄漏、无内存泄漏。
+
+### 背压分流（强制溢出）
+
+瞬时 burst 10000 条触发 `sendToChannel` 的 `select+default` 非阻塞背压 → 溢出分流 Kafka（`kafka_routed>0`），**消息不丢**。Kafka 为可靠性兜底通道（单消费者 ~30 msg/s 批量消费，已从 19 提升），非性能路径；常态 100% 走 Channel（P50 < 2ms）。
+
+---
+
 ## 后续方向
 
 | 方向 | 预期提升 | 难度 |

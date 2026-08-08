@@ -108,3 +108,48 @@ Only use a result in the resume when all of the following are true: `completed=t
 ## Current Status
 
 The pre-v6 burst results are retained only as historical debugging evidence. They used a tool that could count a sender's self-echo as delivery and did not query consumer-group committed offsets, so they must not be reported as expected-receiver latency or verified Kafka lag. Re-run the matrix with the current tool before updating the resume.
+
+## 2C4G Container Scenario (2026-08-08)
+
+> 面向简历的核心压测场景：服务器容器限制 **2 核 / 4GB**（`deploy.resources.limits`），
+> 详见 [docs/2c4g-performance-test-plan.md](./2c4g-performance-test-plan.md)。
+
+### 环境差异
+
+| 项 | 宿主机模式 | 2C4G 容器模式 |
+|---|---|---|
+| 服务器 | `go run`（宿主） | `kamachat-server` 容器（2C4G） |
+| 依赖 | Docker 容器（host 端口） | 同栈容器（服务名连通） |
+| 业务端口 | 127.0.0.1:8000 | 容器映射 8000（Docker NAT） |
+| pprof | 无（历史） | **8091 端口，压测期间可采样** |
+| 压测延迟 | 直连 | 含 Docker NAT 端到端延迟（略高，预期） |
+
+### 登录适配
+
+`ws_load` 使用 **email 登录**（`login` 接口为 email 驱动）。测试用户文件须含 `email` 字段：
+
+```json
+{"uuid":"","nickname":"perf-1","email":"perf1@test.local","password":"Perf123456!","token":""}
+```
+
+参考 `test/performance/users_20_email.json`（已注册 perf1-20@test.local）。
+
+### 5000 QPS 积压用例（0 丢包 + 顺序一致）
+
+```bash
+go run ./test/performance/ws_load.go \
+  -users ./test/performance/users_20_email.json \
+  -messages-per-user 250 -rate-per-user 250 -timeout 90s \
+  -dsn "root:root@tcp(127.0.0.1:3307)/kama_chat_server?parseTime=true"
+```
+
+### pprof 稳定性采样
+
+压测期间采集（佐证"系统稳定不崩溃"）：
+
+```bash
+curl http://127.0.0.1:8091/debug/pprof/goroutine?debug=1
+curl http://127.0.0.1:8091/debug/pprof/heap?debug=1
+```
+
+实测：goroutine 27→27→27（无泄漏），内存 15→23→14MB（压测后回落）。

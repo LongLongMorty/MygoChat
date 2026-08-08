@@ -147,6 +147,14 @@ func LoadConfig() error {
 	if v := os.Getenv("KAMA_KAFKA_GROUP_ID"); v != "" {
 		config.KafkaConfig.GroupID = v
 	}
+	if v := os.Getenv("KAMA_KAFKA_MESSAGE_MODE"); v != "" {
+		config.KafkaConfig.MessageMode = v
+	}
+
+	// 容器化：主服务监听地址覆盖（Docker 内须绑定 0.0.0.0 才能端口映射到宿主机）
+	if v := os.Getenv("KAMA_MAIN_HOST"); v != "" {
+		config.MainConfig.Host = v
+	}
 
 	return nil
 }

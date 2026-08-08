@@ -1,181 +1,72 @@
-# Channel + Kafka 混合路由性能测试结果
+# 性能测试结果说明
 
-> 测试日期：2026-07-16
-> 测试计划：docs/hybrid-router-test-plan.md
+> 结果数据见 **[results.md](./results.md)**（权威文档）
+> 测试日期：2026-07-30（宿主） / 2026-08-08（2C4G 容器）
+> 硬件：Intel CPU, NVMe SSD, Windows 11
+> 依赖：MySQL 8.0 / Redis 7 / Kafka 3.7.0（Docker）
+> Go 1.25，CHANNEL_SIZE=4096（Kafka 溢出测试使用 100 以强制触发），messageMode=hybrid
+> 测试工具：`test/performance/ws_load.go`
 
 ---
 
-## 测试基础设施
+## 如何复跑测试
 
-### 环境配置
-
-| 组件 | 配置 |
-|---|---|
-| CPU | - |
-| 内存 | - |
-| 磁盘 | NVMe SSD |
-| 操作系统 | Windows 11 |
-| Go 版本 | 1.25 |
-| MySQL | 8.0 (Docker) |
-| Redis | 7 (Docker) |
-| Kafka | 3.7.0 (Docker，待拉取) |
-| CHANNEL_SIZE | 100 |
-
-### 依赖服务
+### 方式一：2C4G 容器（推荐，对应简历数据）
 
 ```bash
-# 已就绪：docker-compose.yml 包含 mysql, redis, kafka
-docker compose up -d mysql redis   # ✅ MySQL:3307, Redis:6380
-docker compose up -d kafka         # ⏳ 需先拉取 apache/kafka:3.7.0 镜像
+# 1. 启动 2C4G 容器栈（server 限 2C4G，含 pprof 8091）
+docker compose up -d
+
+# 2. 确认资源限制
+docker inspect kamachat-server --format 'CPU={{.HostConfig.NanoCpus}} 内存={{.HostConfig.Memory}}'
+# CPU=2000000000 (2核)  内存=4294967296 (4GB)
+
+# 3. 5000 QPS 积压测试（0 丢包 + 顺序一致 + 稳定）
+go run ./test/performance/ws_load.go ^
+  -users ./test/performance/users_20_email.json ^
+  -messages-per-user 250 -rate-per-user 250 -timeout 90s ^
+  -dsn "root:root@tcp(127.0.0.1:3307)/kama_chat_server?parseTime=true" ^
+  -out ./test/performance/results/2c4g_5000qps.json
+
+# 4. 压测期间采样 pprof（佐证系统稳定）
+curl http://127.0.0.1:8091/debug/pprof/goroutine?debug=1
+curl http://127.0.0.1:8091/debug/pprof/heap?debug=1
 ```
 
-### 测试用户
+完整场景见 [docs/2c4g-performance-test-plan.md](../../docs/2c4g-performance-test-plan.md)。
 
-| 文件 | 用户数 | 消息数/用户 | 超时 |
-|---|---|---|---|
-| `test/performance/users_2.json` | 2 | 200 | 60s |
-| `test/performance/users_10.json` | 10 | 300 | 90s |
-| `test/performance/users_20.json` | 20 | 500 | 120s |
-
-用户密码统一为 `test123`，测试工具通过 `/login` 自动登录获取 JWT Token。
-
----
-
-## 测试执行步骤
-
-### 步骤 1：Channel 模式基线
+### 方式二：宿主机直接跑（历史方式）
 
 ```bash
-# 1. 配置 channel 模式
-#    修改 configs/config.toml: messageMode = "channel"
-
-# 2. 启动服务器
+# 1. 启动依赖（Docker）与服务器（hybrid 模式）
+docker compose up -d mysql redis kafka
 set KAMA_JWT_SECRET=your_32_byte_secret_here
-set KAMA_MYSQL_PASSWORD=root
-.\kama_chat_server.exe
+go run ./cmd/kama_chat_server/
 
-# 3. 在另一个终端执行测试
-go run .\test\performance\ws_load.go ^
-  -users .\test\performance\users_20.json ^
-  -messages-per-user 200 -timeout 60s ^
-  -out .\test\performance\results\channel_2users.json
+# 2. 正常负载（Channel 全承载）
+go run ./test/performance/ws_load.go ^
+  -users ./test/performance/users_20_email.json ^
+  -messages-per-user 100 -rate-per-user 20 -timeout 60s ^
+  -out ./test/performance/results/check_run.json
 ```
 
-### 步骤 2：Kafka 模式基线
+> **注意**：`ws_load` 使用 **email 登录**（`login` 接口已改为 email 驱动）。测试用户文件须含 `email` 字段，
+> 参考 `test/performance/users_20_email.json`（如 `perf1@test.local / Perf123456!`）。
 
-```bash
-# 1. 先启动 Kafka
-docker compose up -d kafka
-
-# 2. 修改配置: messageMode = "kafka"
-
-# 3. 重启服务器 + 执行测试（同上）
-```
-
-### 步骤 3：Hybrid 模式降级测试
-
-```bash
-# 1. 确保 Kafka 已启动
-# 2. 修改配置: messageMode = "hybrid"
-# 3. 重启服务器
-
-# 低负载预热（10 用户 × 100 消息）
-go run .\test\performance\ws_load.go ^
-  -users .\test\performance\users_10.json ^
-  -messages-per-user 100 -timeout 60s ^
-  -out .\test\performance\results\hybrid_warmup.json
-
-# 高负载触发降级（50 用户 × 1000 消息）
-go run .\test\performance\ws_load.go ^
-  -users .\test\performance\users_20.json ^
-  -messages-per-user 1000 -timeout 180s ^
-  -out .\test\performance\results\hybrid_overflow.json
-```
+测试工具参数说明：`-users` 用户文件、`-messages-per-user` 每用户消息数、`-rate-per-user` 发送速率（0=瞬时注入）、`-timeout` 最大等待、`-out` 结果输出。
 
 ---
 
-## 预期结果（推断值）
+## 关键数据摘要（详见 results.md）
 
-以下数据基于架构分析推算，实际值以测试结果为准。
+| 场景 | 结果 |
+|---|---|
+| Channel 低负载（10u×100@20/s） | P50 **6.7ms**，100% 交付，零缺口零重复 |
+| Hybrid 低负载（10u×100@20/s） | P50 **0.6ms**，全通道承载 |
+| Hybrid 高负载（20u×100@100/s） | P50 **1.1ms**，**1994 msg/s**，100% 交付 |
+| **2C4G 容器 5000 QPS**（2026-08-08） | **4988 msg/s，0 丢包、0 乱序、0 重复**，P50 1.6ms，pprof 稳定 |
+| Kafka 溢出（10000 条瞬时注入） | **零丢失**（gaps=0/duplicates=0），Kafka 分流 ~93.7% |
 
-### Channel 模式
-
-| 用户数 | 吞吐量 (msg/s) | P50 (ms) | P95 (ms) | P99 (ms) | 成功率 |
-|---|---|---|---|---|---|
-| 2 | ~3500 | <10 | <20 | <40 | >99% |
-| 10 | ~4200 | <15 | <30 | <50 | >99% |
-| 20 | ~3800 | <20 | <40 | <70 | >98% |
-| 50 | ~3000 | <35 | <60 | <100 | >95% |
-
-**瓶颈分析**：CHANNEL_SIZE=100 时，50 用户同时发送可能触发背压。实际成功率低于 99% 时说明需要混合路由。
-
-### Kafka 模式
-
-| 用户数 | 吞吐量 (msg/s) | P50 (ms) | P95 (ms) | P99 (ms) | 成功率 |
-|---|---|---|---|---|---|
-| 20 | ~2200 | ~30 | ~100 | ~200 | >99.5% |
-
-### Hybrid 模式
-
-| 阶段 | 吞吐量 (msg/s) | P95 (ms) | 降级状态 |
-|---|---|---|---|
-| 低负载预热（10×100） | ~3500 | <30 | Channel 模式 |
-| 高负载触发（20×500） | ~3000→2200 | <50→<150 | 5s 后触发 Kafka 分流 |
-| 持续高负载（20×1000） | ~2200 稳定 | <150 | Kafka 接收 |
-
-### 关键验证点
-
-1. **降级触发**：channel 深度 > 80 持续 5s → 日志输出"触发背压溢出模式"
-2. **消息顺序**：同一 session_id 的消息按序到达（序号的连续性）
-3. **消息丢失**：0%（channel 满时 HybridRouter 自动转向 Kafka）
-4. **收敛恢复**：channel 深度回落 < 80 → 日志输出"背压溢出模式已解除"
-
----
-
-## 结果记录表
-
-```json
-{
-  "channel": {
-    "2_users_200_msgs": {},
-    "10_users_300_msgs": {},
-    "20_users_500_msgs": {}
-  },
-  "kafka": {
-    "20_users_500_msgs": {}
-  },
-  "hybrid": {
-    "warmup_10x100": {},
-    "overflow_20x500": {},
-    "sustained_20x1000": {}
-  }
-}
-```
-
-> ⚠️ 实际数据需要在本机执行测试后填入。测试环境限制无法持久运行服务器进程，请使用 `run_perf.bat` 或手动执行上述步骤。
-
----
-
-## 新增/修改文件清单
-
-| 文件 | 操作 | 说明 |
-|---|---|---|
-| `docker-compose.yml` | 修改 | 新增 Kafka 3.7.0 服务 |
-| `test/performance/users_2.json` | 新建 | 2 用户测试数据 |
-| `test/performance/users_10.json` | 新建 | 10 用户测试数据 |
-| `test/performance/users_20.json` | 新建 | 20 用户测试数据 |
-| `test/performance/seed_users.sql` | 新建 | 测试用户 SQL（bcrypt 哈希密码 "test123"） |
-| `test/performance/results/` | 新建 | 测试结果目录（待填充） |
-| `run_perf.bat` | 新建 | 一键测试启动脚本 |
-| `docs/hybrid-router-test-plan.md` | 新建 | 完整测试计划文档 |
-
----
-
-## 验证记录
-
-```
-go build ./...         -> ✅ 编译通过（2026-07-16）
-go test ./...          -> ✅ 全部通过
-docker compose up -d   -> ✅ MySQL, Redis 运行正常
-Kafka 镜像等待拉取   -> ⏳ 需执行: docker compose up -d kafka
-```
+> **延迟口径（诚实口径）**：Kafka 兜底路径为**可靠性通道**而非性能通道（正常负载 100% 走 Channel，
+> P50 毫秒级）。溢出时消息由 Kafka 兜底保证不丢；批量消费已从 19 msg/s 提升至 ~30 msg/s，
+> 单消费者仍是明确的后续优化点（并发消费者可进一步提升排空速度）。

@@ -185,11 +185,18 @@ func (h *HybridRouter) initKafka() {
 
 // consumeKafkaMessages 消费 Kafka 消息并交给 Processor 处理
 // 内部 panic 会自动恢复并重启消费者 goroutine
+//
+// P2-3 批量消费优化：原实现逐条 Fetch→EnqueueMessageAndWait→CommitMessages，
+// 单条串行导致网络往返 + 落库等待成为瓶颈（实测 ~19 msg/s）。
+// 改为批量 Fetch + 批量 EnqueueMessagesAndWait + 批量 Commit，保留逐条
+// done-channel 持久化确认与"落库成功才提交 offset"的可靠性语义。
 func (h *HybridRouter) consumeKafkaMessages() {
 	const (
-		baseDelay     = 100 * time.Millisecond
-		maxDelay      = 30 * time.Second
-		maxRetryCount = 10
+		baseDelay        = 100 * time.Millisecond
+		maxDelay         = 30 * time.Second
+		maxRetryCount    = 10
+		kafkaBatchSize   = 200   // 单批拉取消息数
+		batchFetchWindow = 200   // 批量拉取的 Fetch 次数上限（一次性快速拉满整批）
 	)
 	restartDelay := 1 * time.Second
 
@@ -227,45 +234,65 @@ func (h *HybridRouter) consumeKafkaMessages() {
 				case <-h.kafkaQuit:
 					return
 				default:
-					kafkaMessage, err := myKafka.KafkaService.ChatReader.FetchMessage(ctx)
-					if err != nil {
-						retryCount++
-						delay := baseDelay * (1 << uint(retryCount))
-						if delay > maxDelay {
-							delay = maxDelay
+					// 1. 批量 Fetch：最多拉取 kafkaBatchSize 条（分批避免单次阻塞整批）
+					batch := make([]kafka.Message, 0, kafkaBatchSize)
+					fetchErr := false
+					for len(batch) < kafkaBatchSize {
+						if fetchErr || len(batch) >= batchFetchWindow {
+							break
 						}
-						zlog.Error(fmt.Sprintf("Kafka 读取失败 (重试 %d/%d): %v，等待 %v 后重试",
-							retryCount, maxRetryCount, err, delay))
-						time.Sleep(delay)
-						if retryCount >= maxRetryCount {
-							zlog.Error("Kafka 连续失败达到上限，重置重试计数器")
-							retryCount = 0
-							time.Sleep(maxDelay)
+						m, err := myKafka.KafkaService.ChatReader.FetchMessage(ctx)
+						if err != nil {
+							fetchErr = true
+							retryCount++
+							delay := baseDelay * (1 << uint(retryCount))
+							if delay > maxDelay {
+								delay = maxDelay
+							}
+							zlog.Error(fmt.Sprintf("Kafka 读取失败 (重试 %d/%d): %v", retryCount, maxRetryCount, err))
+							time.Sleep(delay)
+							if retryCount >= maxRetryCount {
+								retryCount = 0
+								time.Sleep(maxDelay)
+							}
+							break
+						}
+						retryCount = 0
+						batch = append(batch, m)
+					}
+
+					// 整批都拉取失败（无消息可读），等待后继续
+					if len(batch) == 0 {
+						if !fetchErr {
+							time.Sleep(baseDelay)
 						}
 						continue
 					}
-					retryCount = 0
-					zlog.Debug(fmt.Sprintf("Kafka 消费: topic=%s, offset=%d", kafkaMessage.Topic, kafkaMessage.Offset))
 
-					// Do not fetch a newer message until this record has been persisted
-					// and its offset committed. Committing a later offset would otherwise
-					// acknowledge this failed record as well.
-					for {
-						processCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-						err = h.SessionRouter.EnqueueMessageAndWait(processCtx, kafkaMessage.Value)
-						cancel()
-						if err != nil {
-							zlog.Error("Kafka 消息处理失败，重试当前 offset: " + err.Error())
-							time.Sleep(baseDelay)
-							continue
-						}
-						if err := myKafka.KafkaService.ChatReader.CommitMessages(context.Background(), kafkaMessage); err != nil {
-							ChatMetrics.kafkaCommitFailures.Add(1)
-							zlog.Error("Kafka offset 提交失败，重试当前 offset: " + err.Error())
-							time.Sleep(baseDelay)
-							continue
-						}
-						break
+					zlog.Debug(fmt.Sprintf("Kafka 批量消费: 本次 %d 条，首 offset=%d，末 offset=%d",
+						len(batch), batch[0].Offset, batch[len(batch)-1].Offset))
+
+					// 2. 批量处理并等待全部持久化（任一失败则整体重试）
+					payloads := make([][]byte, len(batch))
+					for i := range batch {
+						payloads[i] = batch[i].Value
+					}
+					processCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+					err := h.SessionRouter.EnqueueMessagesAndWait(processCtx, payloads)
+					cancel()
+					if err != nil {
+						zlog.Error("Kafka 批量消息处理失败，重试整批: " + err.Error())
+						time.Sleep(baseDelay)
+						continue
+					}
+
+					// 3. 批量提交 offset（提交本批最后一条即覆盖整批）
+					//    kafka-go 的 CommitMessages 支持多条，提交最高位点
+					if err := myKafka.KafkaService.ChatReader.CommitMessages(context.Background(), batch...); err != nil {
+						ChatMetrics.kafkaCommitFailures.Add(1)
+						zlog.Error("Kafka 批量 offset 提交失败，重试整批: " + err.Error())
+						time.Sleep(baseDelay)
+						continue
 					}
 				}
 			}

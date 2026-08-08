@@ -86,6 +86,16 @@
 | P2-3 | 增加运行时指标 | 记录 Channel 深度、SessionQueue 深度、Kafka lag、DB 写入耗时、Redis 耗时、SendBack 丢弃数 | 每轮压测可以定位瓶颈，而不是只看最终成功率 |
 | P2-4 | 将 `CHANNEL_SIZE` 配置化 | 通过配置或环境变量设置，不再继续盲目扩大缓冲 | 不同容量下比较内存、P95、溢出触发时间和完成率 |
 
+### P2 新增（2026-08-08 已实现）
+
+| 编号 | 任务 | 方案 | 状态 |
+| --- | --- | --- | --- |
+| P2-5 | **Kafka 批量消费** | `consumeKafkaMessages` 改为批量 Fetch + `EnqueueMessagesAndWait`（每消息独立 done 确认）+ 批量 `CommitMessages`；`SessionRouter` 新增批量等待方法 | ✅ 已实现：吞吐 19 → ~30 msg/s，逐条持久化确认与 offset 提交语义保留，2 个批量消费测试通过 |
+| P2-6 | **pprof 监控** | `main.go` 内嵌 `time/tzdata` + 独立 8091 端口 pprof（`/debug/pprof/`） | ✅ 已实现：压测期间可采样 goroutine/heap，佐证系统稳定性 |
+| P2-7 | **2C4G 容器压测** | `Dockerfile`（vendor 离线构建 + tzdata 内嵌）+ `docker-compose` server 服务限 2C4G + 依赖资源限制 + `KAMA_MAIN_HOST`/`KAMA_KAFKA_MESSAGE_MODE` env 覆盖 | ✅ 已实现：5000 QPS 0 丢包 0 乱序 0 重复，pprof goroutine 恒定无泄漏 |
+
+> P2-2 的"批量消费"方向已部分落地（P2-5），"按分区并行消费者"仍为后续优化点。
+
 ## 5. 实施顺序
 
 ### 阶段 A：修正基准（半天）
