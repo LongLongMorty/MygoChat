@@ -10,11 +10,31 @@ import (
 )
 
 // AuthMiddleware JWT 认证中间件
-// 从 Authorization: Bearer <token> 头解析 JWT，校验通过后注入 uuid 和 is_admin 到 context
+// 从 Authorization: Bearer <token> 头解析 JWT；WebSocket 场景浏览器无法设置自定义
+// Header（浏览器 WebSocket API 限制），回退从 query 参数 ?token=<token> 获取。
+// 校验通过后注入 uuid 和 is_admin 到 context
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
+		var tokenString string
+		if authHeader != "" {
+			// 期望格式: Bearer <token>
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) != 2 || parts[0] != "Bearer" {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "认证格式错误",
+				})
+				c.Abort()
+				return
+			}
+			tokenString = parts[1]
+		} else {
+			// WebSocket 兼容：浏览器 WebSocket API 无法设置自定义 Header，
+			// 从 query 参数取 token（与 /wss handler 的兼容逻辑保持一致）
+			tokenString = c.Query("token")
+		}
+		if tokenString == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"code":    401,
 				"message": "缺少认证信息",
@@ -22,20 +42,11 @@ func AuthMiddleware() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		// 期望格式: Bearer <token>
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    401,
-				"message": "认证格式错误",
-			})
-			c.Abort()
-			return
-		}
-		tokenString := parts[1]
 		claims, err := auth.ParseToken(tokenString)
 		if err != nil {
-			zlog.Error("JWT 解析失败: " + err.Error())
+			// 无效/过期 token 属正常客户端行为（token 24h 过期、客户端残留旧 token），
+			// 使用 Warn 级别，避免无效请求刷屏触发日志风暴
+			zlog.Warn("JWT 解析失败: " + err.Error())
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"code":    401,
 				"message": "无效或过期的认证信息",

@@ -60,9 +60,10 @@ func (u *userInfoService) Login(loginReq request.LoginRequest) (string, *respond
 	res := dao.GormDB.First(&user, "email = ?", email)
 	if res.Error != nil {
 		if errors.Is(res.Error, gorm.ErrRecordNotFound) {
-			message := "用户不存在，请注册"
-			zlog.Error(message)
-			return message, nil, -2
+			// 防账号枚举：与密码错误返回相同文案；dummy bcrypt 抹平响应时间差异
+			zlog.Info("登录失败：邮箱未注册 " + email)
+			_ = auth.VerifyDummy(password)
+			return "邮箱或密码错误", nil, -2
 		}
 		zlog.Error(res.Error.Error())
 		return constants.SYSTEM_ERROR, nil, -1
@@ -73,8 +74,8 @@ func (u *userInfoService) Login(loginReq request.LoginRequest) (string, *respond
 		return message, nil, -2
 	}
 	if !auth.VerifyPassword(user.Password, password) {
-		message := "密码不正确，请重试"
-		zlog.Error(message)
+		message := "邮箱或密码错误"
+		zlog.Info("登录失败：密码错误 " + email)
 		return message, nil, -2
 	}
 
@@ -114,9 +115,9 @@ func (u *userInfoService) EmailLogin(req request.EmailLoginRequest) (string, *re
 	res := dao.GormDB.First(&user, "email = ?", email)
 	if res.Error != nil {
 		if errors.Is(res.Error, gorm.ErrRecordNotFound) {
-			message := "用户不存在，请注册"
-			zlog.Error(message)
-			return message, nil, -2
+			// 防账号枚举：与验证码错误返回相同文案
+			zlog.Info("验证码登录失败：邮箱未注册 " + email)
+			return "邮箱或验证码错误", nil, -2
 		}
 		zlog.Error(res.Error.Error())
 		return constants.SYSTEM_ERROR, nil, -1
@@ -128,7 +129,7 @@ func (u *userInfoService) EmailLogin(req request.EmailLoginRequest) (string, *re
 	}
 
 	if !myemail.VerifyEmailCode(email, req.EmailCode) {
-		message := "验证码不正确或已过期，请重试"
+		message := "邮箱或验证码错误"
 		zlog.Info(message)
 		return message, nil, -2
 	}

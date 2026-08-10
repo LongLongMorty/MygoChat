@@ -13,20 +13,38 @@ import (
 	"time"
 )
 
+const (
+	// EmailCodeTTL 验证码有效期
+	EmailCodeTTL = 5 * time.Minute
+	// EmailCodeCooldown 重发冷却时间，与验证码有效期解耦：
+	// 验证码 5 分钟有效，但 60 秒冷却期过后即可重发，无需等验证码过期
+	EmailCodeCooldown = 60 * time.Second
+)
+
+// codeKey 验证码存储 key（TTL = EmailCodeTTL）
+func codeKey(email string) string {
+	return "auth_code_email_" + email
+}
+
+// cooldownKey 重发冷却 key（TTL = EmailCodeCooldown），仅用于防重复发送
+func cooldownKey(email string) string {
+	return "auth_code_cd_" + email
+}
+
 // SendEmailCode sends a 6-digit verification code to the given email address.
 // Returns (message, retCode) where retCode=0 means success.
 func SendEmailCode(email string) (string, int) {
 	normalized := normalizeEmail(email)
-	key := "auth_code_email_" + normalized
 
-	// Check if an unexpired code already exists
-	existing, err := myredis.GetKey(key)
+	// 原子抢占重发冷却锁（SET NX EX 60）：并发请求只有一个能拿到锁，
+	// 其余立即被拒，避免同一邮箱同时发出多封验证码邮件
+	ok, err := myredis.SetNX(cooldownKey(normalized), "1", EmailCodeCooldown)
 	if err != nil {
 		zlog.Error(err.Error())
 		return "系统错误", -1
 	}
-	if existing != "" {
-		return "验证码已发送，请检查邮箱", -2
+	if !ok {
+		return "发送过于频繁，请稍后再试", -2
 	}
 
 	// Generate 6-digit code
@@ -39,15 +57,18 @@ func SendEmailCode(email string) (string, int) {
 	}
 
 	// Write to Redis with 5-minute TTL
-	if err := myredis.SetKeyEx(key, code, 5*time.Minute); err != nil {
+	if err := myredis.SetKeyEx(codeKey(normalized), code, EmailCodeTTL); err != nil {
+		// 验证码写入失败，释放冷却锁，允许用户立即重试
+		_ = myredis.DelKeyIfExists(cooldownKey(normalized))
 		zlog.Error(err.Error())
 		return "系统错误", -1
 	}
 
 	// Send email via SMTP
 	if err := sendSMTP(normalized, code); err != nil {
-		// SMTP failed — remove the Redis key so the user can retry
-		_ = myredis.DelKeyIfExists(key)
+		// SMTP failed — remove both keys so the user can retry immediately
+		_ = myredis.DelKeyIfExists(codeKey(normalized))
+		_ = myredis.DelKeyIfExists(cooldownKey(normalized))
 		zlog.Error("SMTP发送失败: " + err.Error())
 		return "邮件发送失败，请稍后重试", -1
 	}
@@ -59,9 +80,8 @@ func SendEmailCode(email string) (string, int) {
 // Returns true if the code is correct and not expired.
 func VerifyEmailCode(email, code string) bool {
 	normalized := normalizeEmail(email)
-	key := "auth_code_email_" + normalized
 
-	stored, err := myredis.GetKey(key)
+	stored, err := myredis.GetKey(codeKey(normalized))
 	if err != nil || stored == "" {
 		return false
 	}
@@ -69,7 +89,7 @@ func VerifyEmailCode(email, code string) bool {
 		return false
 	}
 	// One-time consumption: delete immediately on success
-	_ = myredis.DelKeyIfExists(key)
+	_ = myredis.DelKeyIfExists(codeKey(normalized))
 	return true
 }
 

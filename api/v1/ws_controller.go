@@ -34,7 +34,8 @@ func WsLogin(c *gin.Context) {
 	// 解析 JWT 获取用户身份
 	claims, err := auth.ParseToken(token)
 	if err != nil {
-		zlog.Error("WebSocket JWT 校验失败: " + err.Error())
+		// 无效/过期 token 属正常客户端行为（token 24h 过期），Warn 级别避免日志风暴
+		zlog.Warn("WebSocket JWT 校验失败: " + err.Error())
 		c.JSON(http.StatusOK, gin.H{
 			"code":    401,
 			"message": "无效或过期的认证信息",

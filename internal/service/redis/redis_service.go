@@ -37,6 +37,12 @@ func SetKeyEx(key string, value string, timeout time.Duration) error {
 	return nil
 }
 
+// SetNX 原子设置 key（仅当 key 不存在时），返回是否设置成功。
+// 对应 Redis 的 SET key value NX EX timeout，用于防并发抢占场景。
+func SetNX(key string, value string, timeout time.Duration) (bool, error) {
+	return redisClient.SetNX(ctx, key, value, timeout).Result()
+}
+
 func GetKey(key string) (string, error) {
 	value, err := redisClient.Get(ctx, key).Result()
 	if err != nil {

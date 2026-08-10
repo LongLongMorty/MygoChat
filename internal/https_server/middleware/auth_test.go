@@ -87,6 +87,26 @@ func TestAuthMiddlewareValidToken(t *testing.T) {
 	}
 }
 
+// TestAuthMiddlewareQueryToken WebSocket 场景：浏览器无法设置自定义 Header，
+// query 参数携带 Token 应通过并注入 uuid
+func TestAuthMiddlewareQueryToken(t *testing.T) {
+	r := gin.New()
+	r.Use(AuthMiddleware())
+	r.GET("/wss", func(c *gin.Context) {
+		uuid := c.GetString("uuid")
+		c.JSON(200, gin.H{"code": 0, "uuid": uuid})
+	})
+
+	token, _ := auth.GenerateToken("UWS123", 0)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/wss?token="+token, nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("query token 应返回 200, got %d", w.Code)
+	}
+}
+
 // TestAdminMiddlewareNonAdmin 非管理员应返回 403
 func TestAdminMiddlewareNonAdmin(t *testing.T) {
 	r := gin.New()
