@@ -43,6 +43,34 @@ func SetNX(key string, value string, timeout time.Duration) (bool, error) {
 	return redisClient.SetNX(ctx, key, value, timeout).Result()
 }
 
+// SAdd 向集合批量添加成员（覆盖 Set 数据结构的写扩散场景）
+func SAdd(key string, members []string) error {
+	args := make([]interface{}, len(members))
+	for i, m := range members {
+		args[i] = m
+	}
+	return redisClient.SAdd(ctx, key, args...).Err()
+}
+
+// SRem 从集合移除成员
+func SRem(key string, members []string) error {
+	args := make([]interface{}, len(members))
+	for i, m := range members {
+		args[i] = m
+	}
+	return redisClient.SRem(ctx, key, args...).Err()
+}
+
+// SMembers 获取集合全部成员（key 不存在时返回空 slice 且无错误）
+func SMembers(key string) ([]string, error) {
+	return redisClient.SMembers(ctx, key).Result()
+}
+
+// Expire 设置 key 过期时间（用于 Set 等结构的 TTL 兜底）
+func Expire(key string, timeout time.Duration) error {
+	return redisClient.Expire(ctx, key, timeout).Err()
+}
+
 func GetKey(key string) (string, error) {
 	value, err := redisClient.Get(ctx, key).Result()
 	if err != nil {

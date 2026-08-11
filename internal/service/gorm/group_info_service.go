@@ -10,6 +10,7 @@ import (
 	"kama_chat_server/internal/dto/request"
 	"kama_chat_server/internal/dto/respond"
 	"kama_chat_server/internal/model"
+	"kama_chat_server/internal/service/chat"
 	myredis "kama_chat_server/internal/service/redis"
 	"kama_chat_server/pkg/constants"
 	"kama_chat_server/pkg/enum/contact/contact_status_enum"
@@ -115,6 +116,8 @@ func (g *groupInfoService) CreateGroup(groupReq request.CreateGroupRequest) (str
 	if err := myredis.DelKeysWithPattern("contact_mygroup_list_" + groupReq.OwnerId); err != nil {
 		zlog.Error(err.Error())
 	}
+	// 群主入群（事务外）：失效投递用群成员 Set 缓存
+	chat.DelGroupMemberSet(group.Uuid)
 
 	return "创建成功", 0
 }
@@ -319,6 +322,8 @@ func (g *groupInfoService) LeaveGroup(userId string, groupId string) (string, in
 	if err := myredis.DelKeysWithPattern("my_joined_group_list_" + userId); err != nil {
 		zlog.Error(err.Error())
 	}
+	// 成员退群（事务外）：失效投递用群成员 Set 缓存
+	chat.DelGroupMemberSet(groupId)
 	return "退群成功", 0
 }
 
@@ -420,6 +425,8 @@ func (g *groupInfoService) DismissGroup(ownerId, groupId string) (string, int) {
 	if err := myredis.DelKeysWithPattern("group_memberlist_" + groupId); err != nil {
 		zlog.Error(err.Error())
 	}
+	// 解散群（事务外）：失效投递用群成员 Set 缓存
+	chat.DelGroupMemberSet(groupId)
 	return "解散群聊成功", 0
 }
 
@@ -506,6 +513,10 @@ func (g *groupInfoService) DeleteGroups(uuidList []string) (string, int) {
 	}
 	// 删除群时失效所有群成员列表缓存（DelKeysWithPrefix 匹配 group_memberlist_ 前缀）
 	if err := myredis.DelKeysWithPrefix("group_memberlist_"); err != nil {
+		zlog.Error(err.Error())
+	}
+	// 删群（事务外）：失效全部投递用群成员 Set 缓存
+	if err := myredis.DelKeysWithPrefix("group_member_set_"); err != nil {
 		zlog.Error(err.Error())
 	}
 	return "解散/删除群聊成功", 0
@@ -598,6 +609,8 @@ func (g *groupInfoService) EnterGroupDirectly(ownerId, contactId string) (string
 	if err := myredis.DelKeysWithPattern("my_joined_group_list_" + contactId); err != nil {
 		zlog.Error(err.Error())
 	}
+	// 直接进群（事务外）：失效投递用群成员 Set 缓存
+	chat.DelGroupMemberSet(ownerId)
 	return "进群成功", 0
 }
 
@@ -793,5 +806,7 @@ func (g *groupInfoService) RemoveGroupMembers(req request.RemoveGroupMembersRequ
 	if err := myredis.DelKeysWithPattern("group_memberlist_" + req.GroupId); err != nil {
 		zlog.Error(err.Error())
 	}
+	// 移除成员（事务外）：失效投递用群成员 Set 缓存
+	chat.DelGroupMemberSet(req.GroupId)
 	return "移除群聊成员成功", 0
 }

@@ -3,6 +3,7 @@ package v1
 import (
 	"github.com/gin-gonic/gin"
 	"kama_chat_server/internal/dto/request"
+	"kama_chat_server/internal/https_server/middleware"
 	"kama_chat_server/internal/service/chat"
 	"kama_chat_server/pkg/auth"
 	"kama_chat_server/pkg/constants"
@@ -39,6 +40,16 @@ func WsLogin(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    401,
 			"message": "无效或过期的认证信息",
+		})
+		return
+	}
+
+	// 校验用户状态：禁用/删除用户不能凭存量 token 重新握手建立连接
+	if allowed, _ := middleware.CheckUserActive(claims.Uuid); !allowed {
+		zlog.Warn("WebSocket 用户状态异常，拒绝握手: " + claims.Uuid)
+		c.JSON(http.StatusOK, gin.H{
+			"code":    401,
+			"message": "账号不可用，请联系管理员",
 		})
 		return
 	}

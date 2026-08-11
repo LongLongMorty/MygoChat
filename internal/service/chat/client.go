@@ -97,9 +97,38 @@ func flushDeliveryStatuses() {
 			return
 		}
 		for {
-			if res := dao.GormDB.Model(&model.Message{}).Where("uuid IN ?", pending).Update("status", message_status_enum.Sent); res.Error == nil {
-				for _, uuid := range pending {
-					queuedDeliveryStatuses.Delete(uuid)
+			res := dao.GormDB.Model(&model.Message{}).Where("uuid IN ?", pending).Update("status", message_status_enum.Sent)
+			if res.Error == nil {
+				if res.RowsAffected >= int64(len(pending)) {
+					// 全部命中：清空去重标记
+					for _, uuid := range pending {
+						queuedDeliveryStatuses.Delete(uuid)
+					}
+					break
+				}
+				// 竞态修复：消息落库（MessageBatch 异步攒批）可能晚于送达确认，
+				// UPDATE 影响 0 行被当作成功会永久丢失状态更新（去重标记已删）。
+				// 查询实际命中的 uuid，未命中的重新入队，等消息落库后下一轮更新。
+				var matched []string
+				_ = dao.GormDB.Model(&model.Message{}).Where("uuid IN ?", pending).Pluck("uuid", &matched)
+				matchedSet := make(map[string]struct{}, len(matched))
+				for _, u := range matched {
+					matchedSet[u] = struct{}{}
+				}
+				var retry []string
+				for _, u := range pending {
+					if _, ok := matchedSet[u]; ok {
+						queuedDeliveryStatuses.Delete(u)
+					} else {
+						retry = append(retry, u)
+					}
+				}
+				// 未命中项直接发回通道（绕过 LoadOrStore 去重）
+				for _, u := range retry {
+					select {
+					case deliveryStatusUpdates <- u:
+					default:
+					}
 				}
 				break
 			} else {
@@ -185,6 +214,15 @@ func (c *Client) Read() {
 			var message = request.ChatMessageRequest{}
 			if err := json.Unmarshal(jsonMessage, &message); err != nil {
 				zlog.Error(err.Error())
+			}
+			// 拉黑拦截：发送方与接收方任一方向存在拉黑关系即拒收（不持久化、不投递）。
+			// 覆盖三种消息模式（channel/hybrid/kafka）的统一拦截点。
+			if message.SendId != "" && message.ReceiveId != "" && IsBlocked(message.SendId, message.ReceiveId) {
+				zlog.Warn("拉黑关系消息拦截: " + message.SendId + " -> " + message.ReceiveId)
+				if err := c.Conn.WriteMessage(websocket.TextMessage, []byte("消息发送失败：你已被对方拉黑或已拉黑对方")); err != nil {
+					zlog.Error(err.Error())
+				}
+				continue
 			}
 			if messageMode == "channel" {
 				ChatServer.SendMessageToTransmit(jsonMessage)

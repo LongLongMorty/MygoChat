@@ -16,6 +16,7 @@ type MessageMetrics struct {
 	channelRouted            atomic.Uint64 // messages sent via channel path
 	kafkaRouted              atomic.Uint64 // messages sent via Kafka path
 	batchFlushErrors         atomic.Uint64 // batch INSERT failures after all retries
+	fanoutQueueDrops         atomic.Uint64 // group fanout tasks dropped when worker queue is full
 }
 
 type MessageMetricsSnapshot struct {
@@ -29,6 +30,7 @@ type MessageMetricsSnapshot struct {
 	ChannelRouted            uint64
 	KafkaRouted              uint64
 	BatchFlushErrors         uint64
+	FanoutQueueDrops         uint64
 }
 
 var ChatMetrics MessageMetrics
@@ -45,5 +47,6 @@ func (m *MessageMetrics) Snapshot() MessageMetricsSnapshot {
 		ChannelRouted:            m.channelRouted.Load(),
 		KafkaRouted:              m.kafkaRouted.Load(),
 		BatchFlushErrors:         m.batchFlushErrors.Load(),
+		FanoutQueueDrops:         m.fanoutQueueDrops.Load(),
 	}
 }

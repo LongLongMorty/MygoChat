@@ -9,7 +9,9 @@ import (
 	"kama_chat_server/internal/dao"
 	"kama_chat_server/internal/dto/request"
 	"kama_chat_server/internal/dto/respond"
+	"kama_chat_server/internal/https_server/middleware"
 	"kama_chat_server/internal/model"
+	"kama_chat_server/internal/service/chat"
 	myredis "kama_chat_server/internal/service/redis"
 	myemail "kama_chat_server/internal/service/email"
 	"kama_chat_server/pkg/auth"
@@ -330,6 +332,8 @@ func (u *userInfoService) AbleUsers(uuidList []string) (string, int) {
 			zlog.Error(res.Error.Error())
 			return constants.SYSTEM_ERROR, -1
 		}
+		// 主动失效鉴权状态缓存：启用即时生效，否则 60s 内中间件仍按禁用拒绝
+		middleware.InvalidateUserStatusCache(user.Uuid)
 	}
 	// 删除所有"contact_user_list"开头的key
 	//if err := myredis.DelKeysWithPrefix("contact_user_list"); err != nil {
@@ -352,6 +356,14 @@ func (u *userInfoService) DisableUsers(uuidList []string) (string, int) {
 			zlog.Error(res.Error.Error())
 			return constants.SYSTEM_ERROR, -1
 		}
+		// 踢掉已建立的 WebSocket 连接：禁用即时生效。
+		// JWT 无状态 + 中间件不查库，存量 token 24h 内仍有效，只有强制断开连接才能止损；
+		// 用户离线时 ClientLogout 幂等返回成功。
+		if msg, ret := chat.ClientLogout(user.Uuid); ret != 0 {
+			zlog.Error("禁用用户踢线失败 " + user.Uuid + ": " + msg)
+		}
+		// 主动失效鉴权状态缓存：禁用即时生效，中间件不再放行存量 token
+		middleware.InvalidateUserStatusCache(user.Uuid)
 		var sessionList []model.Session
 		if res := dao.GormDB.Where("send_id = ? or receive_id = ?", user.Uuid, user.Uuid).Find(&sessionList); res.Error != nil {
 			zlog.Error(res.Error.Error())
@@ -389,6 +401,13 @@ func (u *userInfoService) DeleteUsers(uuidList []string) (string, int) {
 			zlog.Error(res.Error.Error())
 			return constants.SYSTEM_ERROR, -1
 		}
+
+		// 踢掉已建立的 WebSocket 连接：删除用户即时生效（原因同上，禁用/删除都必须断线止损）
+		if msg, ret := chat.ClientLogout(user.Uuid); ret != 0 {
+			zlog.Error("删除用户踢线失败 " + user.Uuid + ": " + msg)
+		}
+		// 主动失效鉴权状态缓存：删除即时生效，中间件不再放行存量 token
+		middleware.InvalidateUserStatusCache(user.Uuid)
 
 		// 删除会话
 		var sessionList []model.Session

@@ -53,6 +53,7 @@ func init() {
 			"kafka_commit_failures":       s.KafkaCommitFailures,
 			"cache_queue_drops":           s.CacheQueueDrops,
 			"batch_flush_errors":          s.BatchFlushErrors,
+			"fanout_queue_drops":          s.FanoutQueueDrops,
 		})
 	})
 

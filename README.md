@@ -19,6 +19,8 @@ Client → WebSocket → HybridRouter ─┬─ Channel (正常路径, ~0.6ms P5
 - **Kafka 分流**：overflow 模式下的消息路由到 Kafka 队列，消费者批量拉取 + 批量提交 offset，异步排空后投递到 WebSocket 客户端
 - **零丢失恢复**：三轮 CHANNEL_SIZE=100 强制溢出测试验证，10000 条消息 100% 投递，gaps=0
 - **非阻塞背压**：`sendToChannel` 用 `select+default`，Channel 满立即分流 Kafka，发送方不阻塞、不丢
+- **群聊写扩散扇出**：群消息由 8-worker 协程池广播（`FanoutExecutor`），按群哈希分片保证同群串行保序；会话 worker 只负责构造一条 JSON，扇出计算完全解耦
+- **群成员 Redis Set 缓存**：投递路径查成员零 DB 查询（`group_member_set_<groupId>`，miss 重建 + 10min TTL），7 个成员变更路径全部主动失效
 
 ### 三层路由架构
 
@@ -32,11 +34,15 @@ HybridRouter
   │     ├── 每秒采样 channel 深度
   │     ├── 连续 5 次超阈值 → overflowMode = true
   │     └── 连续 5 次低阈值 → overflowMode = false
-  └── KafkaConsumer
-        ├── 批量 FetchMessage（不自动提交）
-        ├── 批量 EnqueueMessagesAndWait（逐条持久化确认）
-        ├── 批量 CommitMessages
-        └── 失败重试整批（3 次后退避）
+  ├── KafkaConsumer
+  │     ├── 批量 FetchMessage（不自动提交）
+  │     ├── 批量 EnqueueMessagesAndWait（逐条持久化确认）
+  │     ├── 批量 CommitMessages
+  │     └── 失败重试整批（3 次后退避）
+  └── FanoutExecutor（群消息写扩散协程池）
+        ├── 8 worker × 1024 队列，FNV 哈希分片：同群固定同一 worker（群内保序）
+        ├── 非阻塞 Submit：队列满 drop + 计数（消息已落库，离线可拉历史）
+        └── worker：Redis Set 取成员 → 锁内快照 → 锁外逐连接投递
 ```
 
 ### 可观测性

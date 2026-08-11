@@ -10,6 +10,7 @@ import (
 	"kama_chat_server/internal/dto/request"
 	"kama_chat_server/internal/dto/respond"
 	"kama_chat_server/internal/model"
+	"kama_chat_server/internal/service/chat"
 	myredis "kama_chat_server/internal/service/redis"
 	"kama_chat_server/pkg/constants"
 	"kama_chat_server/pkg/enum/contact/contact_status_enum"
@@ -247,6 +248,8 @@ func (u *userContactService) DeleteContact(ownerId, contactId string) (string, i
 	if err := myredis.DelKeysWithPattern("contact_user_list_" + ownerId); err != nil {
 		zlog.Error(err.Error())
 	}
+	// 主动失效拉黑关系缓存：删除好友可能覆盖原拉黑状态，避免缓存误拦截
+	chat.InvalidateContactBlack(ownerId, contactId)
 	return "删除联系人成功", 0
 }
 
@@ -561,6 +564,11 @@ func (u *userContactService) PassContactApply(ownerId string, contactId string) 
 		if err := myredis.DelKeysWithPattern("my_joined_group_list_" + contactId); err != nil {
 			zlog.Error(err.Error())
 		}
+		// 群申请通过（事务外）：失效展示缓存（原实现遗漏）+ 投递用群成员 Set 缓存
+		if err := myredis.DelKeysWithPattern("group_memberlist_" + ownerId); err != nil {
+			zlog.Error(err.Error())
+		}
+		chat.DelGroupMemberSet(ownerId)
 		return "已通过加群申请", 0
 	}
 }
@@ -604,6 +612,8 @@ func (u *userContactService) BlackContact(ownerId string, contactId string) (str
 		zlog.Error(res.Error.Error())
 		return constants.SYSTEM_ERROR, -1
 	}
+	// 主动失效拉黑关系缓存：拉黑即时生效，无需等待 60s TTL
+	chat.InvalidateContactBlack(ownerId, contactId)
 	// 删除会话
 	var deletedAt gorm.DeletedAt
 	deletedAt.Time = time.Now()
@@ -646,6 +656,8 @@ func (u *userContactService) CancelBlackContact(ownerId string, contactId string
 		zlog.Error(res.Error.Error())
 		return constants.SYSTEM_ERROR, -1
 	}
+	// 主动失效拉黑关系缓存：解除拉黑即时生效
+	chat.InvalidateContactBlack(ownerId, contactId)
 	return "已解除拉黑该联系人", 0
 }
 

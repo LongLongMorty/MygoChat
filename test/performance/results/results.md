@@ -230,6 +230,33 @@ goroutine 恒定、内存压测后回落 → 无 goroutine 泄漏、无内存泄
 
 ---
 
+## 群聊扇出改造回归（2026-08-10，宿主机）
+
+> 改造内容：群成员 Redis Set 缓存（投递路径 DB 查询 → 0）+ `FanoutExecutor` 8-worker 协程池写扩散扇出。
+> 环境：宿主机直接运行新代码，MySQL/Redis/Kafka 依赖容器化（Docker），未限制 2C4G（与 2026-08-08 口径不同，仅供参考）。
+
+### 5000 QPS 回归（`fanout_regression_5000qps.json`）
+
+| 指标 | 值 |
+|------|-----|
+| 发送 / 收到 / 持久化 | 5000 / 5000 / 5000（100%） |
+| 吞吐 | **4440 msg/s**（含首轮热身） |
+| duplicates / sequence_gaps | **0 / 0** |
+| 全部失败计数（queue timeouts / process / commit / flush） | **0** |
+| fanout_queue_drops | **0** |
+| 完成率 | **100%**（completed=true） |
+
+### 群聊扇出冒烟（2 用户群，5 条群消息）
+
+| 验证项 | 结果 |
+|--------|------|
+| 接收方按序收到 | ✅ 5/5，严格 #1→#5 |
+| 成员缓存重建 | ✅ miss → DB 重建 → SMEMBERS 返回全部成员 |
+| 缓存主动失效 | ✅ 进群后 `group_member_set_` EXISTS=0 |
+| 送达状态更新 | ✅ 5/5 status=Sent（顺带修复 flush 与批量落库的竞态） |
+
+---
+
 ## 后续方向
 
 | 方向 | 预期提升 | 难度 |
@@ -238,3 +265,4 @@ goroutine 恒定、内存压测后回落 → 无 goroutine 泄漏、无内存泄
 | SessionQueue 多 worker（保序） | 2-4x | 中 |
 | Kafka 消费者并行度提升 | 减少溢出排空时间 | 中 |
 | Processor 多阶段流水线 | 2x | 高 |
+| 群扇出分片细化（千人群） | 降低单 worker 投递耗时 | 中 |

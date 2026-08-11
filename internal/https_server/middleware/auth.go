@@ -54,6 +54,16 @@ func AuthMiddleware() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		// 校验用户状态：禁用/删除用户的存量 token 立即失效（JWT 无状态 + 只验签的 24h 漏洞）
+		if allowed, statusCode := CheckUserActive(claims.Uuid); !allowed {
+			zlog.Warn("用户状态异常，拒绝访问: " + claims.Uuid)
+			c.JSON(statusCode, gin.H{
+				"code":    statusCode,
+				"message": "账号不可用，请联系管理员",
+			})
+			c.Abort()
+			return
+		}
 		// 注入用户信息到 context
 		c.Set("uuid", claims.Uuid)
 		c.Set("is_admin", claims.IsAdmin)

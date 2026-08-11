@@ -34,6 +34,7 @@ type IMessageProcessor interface {
 type MessageProcessor struct {
 	Clients        map[string]*Client
 	mutex          *sync.RWMutex
+	Fanout         *FanoutExecutor // 群消息写扩散扇出协程池
 	cacheTasks     chan func()
 	stopCache      chan struct{}
 	cacheCloseOnce sync.Once
@@ -81,6 +82,7 @@ func NewMessageProcessor(clients map[string]*Client, mutex *sync.RWMutex) *Messa
 	processor := &MessageProcessor{
 		Clients:    clients,
 		mutex:      mutex,
+		Fanout:     NewFanoutExecutor(clients, mutex),
 		cacheTasks: make(chan func(), cacheTaskQueueSize),
 		stopCache:  make(chan struct{}),
 	}
@@ -391,30 +393,10 @@ func (mp *MessageProcessor) forwardToGroup(message model.Message, rawAvatar stri
 		Uuid:    message.Uuid,
 	}
 
-	// 查群成员列表
-	members, err := getActiveGroupMemberIDs(message.ReceiveId)
-	if err != nil {
-		zlog.Error(err.Error())
-	}
-
-	// Copy client references under the map lock, then enqueue outside it.
-	type deliveryTarget struct {
-		uuid   string
-		client *Client
-	}
-	targets := make([]deliveryTarget, 0, len(members))
-	mp.mutex.RLock()
-	for _, member := range members {
-		if client, ok := mp.Clients[member]; ok {
-			targets = append(targets, deliveryTarget{uuid: member, client: client})
-		}
-	}
-	mp.mutex.RUnlock()
-	for _, target := range targets {
-		if err := target.client.EnqueueDelivery(messageBack); err != nil {
-			zlog.Warn(fmt.Sprintf("群成员 %s 消息未实时送达: %v", target.uuid, err))
-		}
-	}
+	// 写扩散扇出：一条 messageBack 由协程池广播给群内所有在线成员。
+	// 会话 worker 不再同步循环投递（解耦线性循环）；同群哈希分片串行保序；
+	// 发送方作为群成员自然包含在广播内（回显保留）。
+	mp.Fanout.Submit(message.ReceiveId, messageBack)
 
 	mp.enqueueCacheTask(func() {
 		mp.updateGroupMessageCache(message, messageRsp)
