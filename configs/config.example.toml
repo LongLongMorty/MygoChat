@@ -22,9 +22,9 @@ db = 0
 [emailConfig]
 host = "smtp.qq.com"
 port = 465
-username = "3635532249@qq.com"
-password = "bsssoaazxgvfdaie"
-from = "3635532249@qq.com"
+username = "your-email@qq.com"
+password = "your-smtp-auth-code"
+from = "your-email@qq.com"
 
 [logConfig]
 logPath = "./logs/kama_chat.log"

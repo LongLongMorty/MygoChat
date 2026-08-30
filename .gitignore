@@ -60,6 +60,10 @@ your*
 # Keep results.md and README.md but ignore individual JSON result files
 test/performance/results/*.json
 test/performance/users.json
+test/performance/users_20*.json
+
+# Config with real credentials (SMTP auth code / DB passwords) — keep a template instead
+configs/config.toml
 
 # Temp files
 test_*.json
