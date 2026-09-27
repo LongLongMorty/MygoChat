@@ -34,6 +34,13 @@ type durableMessageProcessor interface {
 	ProcessMessageAndWait(ctx context.Context, data []byte) error
 }
 
+// envelopeMessageProcessor 支持携带幂等 ID 的信封处理。
+// MessageProcessor 实现该接口，SessionRouter 优先使用它透传 MsgID；
+// 测试用的 mock 未实现时回退到原始 ProcessMessage 路径。
+type envelopeMessageProcessor interface {
+	ProcessEnvelope(ctx context.Context, msgID string, data []byte, waitForPersistence bool) error
+}
+
 type SessionRouter struct {
 	sessions    map[string]*SessionQueue
 	mu          sync.RWMutex
@@ -107,6 +114,13 @@ func (sr *SessionRouter) EnqueueMessagesAndWait(ctx context.Context, envelopeDat
 		}
 	}
 	return nil
+}
+
+// ActiveSessions 返回当前活跃的会话队列数量（供指标采集）。
+func (sr *SessionRouter) ActiveSessions() int {
+	sr.mu.RLock()
+	defer sr.mu.RUnlock()
+	return len(sr.sessions)
 }
 
 func (sr *SessionRouter) enqueue(ctx context.Context, envelopeData []byte, done chan error) error {
@@ -246,7 +260,14 @@ func (sr *SessionRouter) processEnvelope(queue *SessionQueue, item queuedEnvelop
 
 	for {
 		var err error
-		if item.done != nil {
+		if ep, ok := queue.processor.(envelopeMessageProcessor); ok {
+			// 透传入口生成的幂等 ID，落库时据此去重
+			ctx := item.ctx
+			if item.done == nil || ctx == nil {
+				ctx = context.Background()
+			}
+			err = ep.ProcessEnvelope(ctx, item.envelope.MsgID, item.envelope.Payload, item.done != nil)
+		} else if item.done != nil {
 			if processor, ok := queue.processor.(durableMessageProcessor); ok {
 				err = processor.ProcessMessageAndWait(item.ctx, item.envelope.Payload)
 			} else {

@@ -1,5 +1,16 @@
 # MyGoChat 性能与可靠性改进计划
 
+> **后续工作已完成（更新说明）**
+>
+> 本文档是 2026-07-29 制定的性能与可靠性改进计划，记录 Hybrid 链路的 P0–P2 任务。计划之后，项目又完成了以下独立专项；本文档的「当前基线 / 改进目标」仅反映当时状态，请勿据此判断系统现状。
+>
+> - **分布式多实例投递**：presence 在线路由表 + Redis Stream 实例间总线 + 会话亲和 —— [distributed-spec.md](distributed-spec.md)
+> - **消息可靠性**：入口幂等 ID + `client_msg_id` 端到端去重、`ON CONFLICT DO NOTHING` 幂等落库、死信队列 DLQ —— [reliability.md](reliability.md)
+> - **可观测性**：Prometheus + Grafana —— [observability.md](observability.md)
+> - **安全与连接**：认证接口限流 [security.md](security.md)、WebSocket 心跳/半开检测 [websocket.md](websocket.md)
+>
+> 现行架构总览见 [architecture.md](architecture.md)，文档索引见 [README.md](README.md)。
+
 ## 1. 文档信息
 
 | 项目 | 内容 |

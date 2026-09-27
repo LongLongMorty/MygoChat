@@ -10,11 +10,14 @@ import (
 	"kama_chat_server/internal/https_server"
 	"kama_chat_server/internal/service/chat"
 	"kama_chat_server/internal/service/kafka"
+	"kama_chat_server/internal/service/presence"
+	"kama_chat_server/internal/service/transport"
 	"kama_chat_server/pkg/auth"
 	"kama_chat_server/pkg/zlog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 func main() {
@@ -40,6 +43,27 @@ func main() {
 	host := conf.MainConfig.Host
 	port := conf.MainConfig.Port
 	kafkaConfig := conf.KafkaConfig
+
+	// 分布式（多实例）投递：仅 hybrid 模式接入；未启用时保持单实例行为。
+	if conf.ClusterConfig.Enabled {
+		if kafkaConfig.MessageMode != "hybrid" {
+			zlog.Warn("clusterConfig.enabled=true 但 messageMode 非 hybrid，分布式投递未启用")
+		} else {
+			instanceID := conf.ClusterConfig.InstanceID
+			if instanceID == "" {
+				hostname, _ := os.Hostname()
+				instanceID = fmt.Sprintf("%s:%d", hostname, port)
+			}
+			pres := presence.New(instanceID, time.Duration(conf.ClusterConfig.PresenceTTLSeconds)*time.Second)
+			bus := transport.NewInstanceBus(instanceID, conf.ClusterConfig.StreamMaxLen)
+			chat.HybridChatRouter.EnableCluster(
+				instanceID, pres, bus,
+				time.Duration(conf.ClusterConfig.HeartbeatSeconds)*time.Second,
+				conf.ClusterConfig.SessionAffinity,
+			)
+			zlog.Info("分布式投递实例标识: " + instanceID)
+		}
+	}
 
 	// 根据消息模式启动对应的 Chat Server
 	switch kafkaConfig.MessageMode {

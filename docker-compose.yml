@@ -109,6 +109,11 @@ services:
       KAMA_KAFKA_BROKER: kafka:9092
       # 压测可临时切换：channel / kafka / hybrid
       KAMA_KAFKA_MESSAGE_MODE: hybrid
+      # 分布式多实例投递：单实例保持 false；多副本时每实例设置唯一 KAMA_INSTANCE_ID
+      KAMA_CLUSTER_ENABLED: "false"
+      KAMA_INSTANCE_ID: "kamachat-1"
+      # 会话亲和：同一会话固定归属某实例，保证跨实例单会话有序（需 cluster 开启）
+      KAMA_SESSION_AFFINITY: "false"
       # 容器内绑定 0.0.0.0，Docker 端口映射才能从宿主机访问 8000
       KAMA_MAIN_HOST: "0.0.0.0"
       # pprof 调试级别
@@ -125,8 +130,48 @@ services:
           cpus: "2"
           memory: 4G
 
+  # 可观测性：Prometheus 抓取 /prometheus，Grafana 预置数据源与看板
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: kamachat-prometheus
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - server
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 512M
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: kamachat-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 512M
+
 volumes:
   mysql_data:
   redis_data:
   server_logs:
   server_static:
+  prometheus_data:
+  grafana_data:

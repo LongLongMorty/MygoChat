@@ -1513,8 +1513,16 @@ export default {
       }
       router.push("/chat/sessionlist");
     };
+    // 生成客户端幂等键：服务端据此派生稳定消息 ID，重试/重复发送不会产生重复消息
+    const genClientMsgId = () => {
+      if (window.crypto && window.crypto.randomUUID) {
+        return window.crypto.randomUUID();
+      }
+      return Date.now() + "-" + Math.random().toString(16).slice(2);
+    };
     const sendMessage = () => {
       const chatMessageRequest = {
+        client_msg_id: genClientMsgId(),
         session_id: data.sessionId,
         type: 0,
         content: data.chatMessage,
@@ -1534,6 +1542,7 @@ export default {
 
     const sendFileMessage = async (fileUrl, serverName, originalName) => {
       const chatFileMessageRequest = {
+        client_msg_id: genClientMsgId(),
         session_id: data.sessionId,
         type: 2,
         content: "",
@@ -1553,6 +1562,7 @@ export default {
 
     const sendAvatarMessage = (avatarUrl) => {
       const chatAvatarMessageRequest = {
+        client_msg_id: genClientMsgId(),
         session_id: data.sessionId,
         type: 2,
         content: "",

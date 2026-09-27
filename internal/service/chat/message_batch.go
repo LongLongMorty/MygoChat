@@ -7,6 +7,8 @@ import (
 	"kama_chat_server/pkg/zlog"
 	"sync"
 	"time"
+
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -74,7 +76,7 @@ func (bw *MessageBatchWriter) Enqueue(msg *model.Message) <-chan error {
 	if bw.closed {
 		bw.mu.Unlock()
 		// fall back to single-row insert if already shut down
-		err := dao.GormDB.Create(msg).Error
+		err := dao.GormDB.Clauses(clause.OnConflict{DoNothing: true}).Create(msg).Error
 		if err != nil {
 			zlog.Error(fmt.Sprintf("MessageBatch fallback insert: %v", err))
 		}
@@ -175,7 +177,9 @@ func (bw *MessageBatchWriter) flush() {
 		messages[i] = item.message
 	}
 	for attempt := 0; attempt < maxFlushRetries; attempt++ {
-		err := dao.GormDB.CreateInBatches(messages, batchFlushSize).Error
+		// OnConflict DO NOTHING：重投/重试携带同一 uuid 时静默跳过，
+		// 既避免 1062 失败整批，又保证消息不重复落库（幂等）
+		err := dao.GormDB.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(messages, batchFlushSize).Error
 		if err == nil {
 			bw.totalFlushed += int64(n)
 			bw.totalFlushes++

@@ -40,6 +40,13 @@ const (
 	clientDeliveryQueueSize = 4096
 	deliveryStatusQueueSize = 32768
 	deliveryStatusBatchSize = 100
+
+	// WebSocket 心跳与超时：服务端主动 ping，客户端回 pong。
+	// 超过 wsPongWait 未收到 pong 判定为半开连接，主动断开释放资源。
+	wsWriteWait  = 10 * time.Second
+	wsPongWait   = 60 * time.Second
+	wsPingPeriod = 50 * time.Second // 必须 < wsPongWait
+	wsReadLimit  = 1 << 20          // 单条入站消息上限 1MB
 )
 
 var errClientClosed = errors.New("websocket client is closed")
@@ -196,6 +203,12 @@ var messageMode = config.GetConfig().KafkaConfig.MessageMode
 // 读取websocket消息并发送给send通道
 func (c *Client) Read() {
 	zlog.Info("ws read goroutine start")
+	// 半开连接检测：读 deadline 由 pong 续期，超时则 ReadMessage 报错并触发断开清理
+	c.Conn.SetReadLimit(wsReadLimit)
+	_ = c.Conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	c.Conn.SetPongHandler(func(string) error {
+		return c.Conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	})
 	for {
 		// 阻塞有一定隐患，因为下面要处理缓冲的逻辑，但是可以先不做优化，问题不大
 		_, jsonMessage, err := c.Conn.ReadMessage() // 阻塞状态
@@ -248,8 +261,12 @@ func (c *Client) Read() {
 }
 
 // 从send通道读取消息发送给websocket
+// 所有写操作（业务消息 + 心跳 ping）都在本 goroutine 内串行执行，
+// 满足 gorilla/websocket "同一连接只允许一个并发写者" 的约束。
 func (c *Client) Write() {
 	zlog.Info("ws write goroutine start")
+	ticker := time.NewTicker(wsPingPeriod)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-c.done:
@@ -258,12 +275,20 @@ func (c *Client) Write() {
 			if messageBack == nil {
 				continue
 			}
+			_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 			if err := c.Conn.WriteMessage(websocket.TextMessage, messageBack.Message); err != nil {
 				zlog.Error(err.Error())
 				c.Close()
 				return
 			}
 			enqueueDeliveryStatus(messageBack.Uuid)
+		case <-ticker.C:
+			_ = c.Conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				zlog.Warn("ws 心跳 ping 失败，关闭连接: " + err.Error())
+				c.Close()
+				return
+			}
 		}
 	}
 }

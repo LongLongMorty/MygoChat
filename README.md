@@ -45,10 +45,49 @@ HybridRouter
         └── worker：Redis Set 取成员 → 锁内快照 → 锁外逐连接投递
 ```
 
+### 分布式多实例投递（可选）
+
+默认关闭（`clusterConfig.enabled=false`），关闭时行为与单实例完全一致。开启后支持多实例水平扩展：
+
+```
+实例 A                              Redis                              实例 B
+Client(A本地) ──┐        presence:user:<uuid> → 实例ID        ┌── Client(B本地)
+                │        chat:deliver:<instanceID> (Stream)  │
+Distributor ────┤                                             ├──── Distributor
+  本地目标 → 直投│                                             │  本地目标 → 直投
+  异地目标 → 批量 MGET 定位 → 按实例聚合 XADD ──────────────▶ │
+```
+
+- **在线路由表**：`presence:user:<uuid>` 记录用户所在实例，登录注册、心跳续期、断开注销，TTL 兜底
+- **本地优先**：本机用户仍走内存快路径（零额外 Redis 往返），异地目标才做一次批量 `MGET` 定位
+- **实例间总线**：Redis Stream `chat:deliver:<instanceID>` + 消费组 + `XACK`，处理成功才确认，失败保留 pending 重投
+- **群扇出收敛**：远程成员按实例聚合，发布次数由 O(成员数) 收敛为 O(实例数)
+- **去重**：接收端按 `消息uuid|目标` TTL 去重，抵御 Stream 至少一次重投
+- **会话亲和（可选）**：`sessionAffinity=true` 时，同一会话按一致性哈希固定归属某实例处理，把单实例内的顺序保证扩展到跨实例（序号由归属实例单点生成）
+- **可观测**：`/metrics` 暴露 `cross_node_publish` / `cross_node_received` / `cross_node_dedup_dropped` / `session_forwarded` 等计数
+
+> 详见 [docs/distributed-spec.md](docs/distributed-spec.md)。本期仅 hybrid 模式接入。
+
+### 消息可靠性（不重复 / 不阻塞 / 不丢）
+
+**幂等落库（端到端）**：Kafka 消费是 at-least-once，重放/重试可能重复处理同一条消息。项目在**消息入口生成稳定幂等 ID**（`MessageEnvelope.MsgID`），透传到落库层作为 `message.uuid`，并以 `ON DUPLICATE KEY UPDATE`（`clause.OnConflict{DoNothing}`）落库——同一信封无论处理多少次，`message` 表最多一条记录，且批内重复不再触发 1062 导致整批失败。客户端发送时携带 `client_msg_id`，服务端按 `(send_id, client_msg_id)` 派生 `MsgID`，**网络重试/重复点击也不产生重复消息**。
+
+**死信队列**：消费端对同一批处理失败维护重试计数，达到 `maxProcessRetries` 后转投死信主题 `chat_message_dlq`（header 附带原始 partition/offset、原因、时间）并提交 offset，避免毒消息无限重试阻塞分区；转投失败则不提交、继续重试，绝不静默丢消息。指标 `kamachat_kafka_dlq_total`。
+
+详见 [docs/reliability.md](docs/reliability.md)。
+
 ### 可观测性
 
+- **Prometheus + Grafana**：`/prometheus` 暴露标准文本指标（路由/可靠性/批量落库/分布式/Go runtime），`docker compose` 内置 Prometheus 抓取与 Grafana 预置看板「KamaChat 概览」，详见 [docs/observability.md](docs/observability.md)
+- **轻量 `/metrics`**：JSON 格式路由计数器，供性能测试工具 `ws_load.go` 直接读取
 - **pprof**：服务器 8091 端口暴露 `/debug/pprof/`（goroutine/heap/profile），压测期间可采样系统资源，佐证稳定性
 - **容器化**：`Dockerfile`（vendor 离线构建 + tzdata 内嵌）+ `docker-compose` server 服务限 2C4G，支持受限环境压测
+
+### 安全加固
+
+- **接口限流**：`/login`、`/register`、`/user/sendEmailCode`、`/user/emailLogin` 按客户端 IP 固定窗口限流（Redis `INCR`+`EXPIRE`，fail-open），防暴力破解与验证码滥发；指标 `kamachat_http_ratelimit_blocked_total`
+- JWT (HS256) + bcrypt、邮箱 `(email, deleted_at)` 唯一索引、验证码一次性消费、禁用用户存量 token 即时失效、CORS 白名单、文件下载鉴权、上传类型/内容检测
+- 详见 [docs/security.md](docs/security.md)
 
 ### 性能测试框架
 
@@ -116,7 +155,8 @@ HybridRouter
 - 单聊 / 群聊消息
 - 文本 / 文件 / 图片 / 音视频通话
 - 消息持久化（MySQL + Kafka）
-- 消息历史查询
+- 消息历史查询（游标分页：`limit` + `before_id`）
+- **WebSocket 心跳**：服务端 ping / 客户端 pong + 读写 deadline，半开连接自动清理；所有写操作单 goroutine 串行（详见 [docs/websocket.md](docs/websocket.md)）
 
 ### 认证系统
 - **邮箱注册**（SMTP 验证码，5 分钟有效期，一次性消费）
@@ -151,6 +191,7 @@ HybridRouter
 | 缓存 | Redis 7 |
 | 认证 | JWT (HS256) + bcrypt |
 | 邮件 | SMTP (SSL 465 / STARTTLS 587) |
+| 可观测 | Prometheus + Grafana + pprof |
 | 部署 | Docker Compose |
 
 ## 快速开始
@@ -205,7 +246,8 @@ go run ./test/performance/ws_load.go \
 | POST | `/user/sendEmailCode` | 发送邮箱验证码 |
 | POST | `/user/emailLogin` | 邮箱验证码登录 |
 | GET | `/wss` | WebSocket 连接 |
-| GET | `/metrics` | 路由计数器 |
+| GET | `/metrics` | 路由计数器（JSON） |
+| GET | `/prometheus` | Prometheus 文本指标 |
 
 #### 认证路由（需 JWT）
 | 方法 | 路径 | 说明 |
@@ -230,6 +272,11 @@ go run ./test/performance/ws_load.go \
 | `KAMA_KAFKA_BROKER` | Kafka 地址 | 127.0.0.1:9092 |
 | `KAMA_KAFKA_CHAT_TOPIC` | Kafka 聊天 topic | chat_message |
 | `KAMA_KAFKA_GROUP_ID` | Kafka 消费者组 | chat |
+| `KAMA_KAFKA_DLQ_TOPIC` | 死信主题（空则禁用 DLQ） | chat_message_dlq |
+| `KAMA_KAFKA_MAX_PROCESS_RETRIES` | 批处理失败重试上限，超过转 DLQ | 5 |
+| `KAMA_CLUSTER_ENABLED` | 是否启用分布式多实例投递 | false |
+| `KAMA_INSTANCE_ID` | 实例唯一标识（多实例必填，缺省 hostname:port） | — |
+| `KAMA_SESSION_AFFINITY` | 会话亲和（保证跨实例单会话有序，需集群开启） | false |
 | `KAMA_CONFIG_PATH` | 配置文件路径 | configs/config.toml |
 
 ## 项目结构
@@ -243,19 +290,36 @@ go run ./test/performance/ws_load.go \
 │   ├── config/             # 配置加载
 │   ├── dao/                # 数据库初始化
 │   ├── dto/                # 请求/响应 DTO
-│   ├── https_server/       # HTTP 路由 + 中间件
+│   ├── https_server/       # HTTP 路由 + 中间件（认证/限流）
+│   ├── metrics/            # Prometheus 指标采集
 │   ├── model/              # GORM 模型
 │   └── service/
-│       ├── chat/           # 核心：混合路由、会话、客户端
+│       ├── chat/           # 核心：混合路由、会话、客户端、分布式投递、DLQ
 │       ├── email/          # SMTP 邮件服务
 │       ├── gorm/           # 业务服务层
-│       ├── kafka/          # Kafka 客户端
-│       └── redis/          # Redis 客户端
+│       ├── kafka/          # Kafka 客户端 + 死信主题
+│       ├── presence/       # 分布式在线路由表
+│       ├── redis/          # Redis 客户端（含 Stream）
+│       └── transport/      # 实例间投递总线（Redis Stream）
 ├── pkg/                    # 公共工具
 └── test/                   # 测试
     ├── performance/        # 性能测试工具 + 结果
     └── integration/        # 集成测试
 ```
+## 文档导航
+
+完整索引见 [docs/README.md](docs/README.md)，核心专题：
+
+| 文档 | 主题 |
+|------|------|
+| [docs/architecture.md](docs/architecture.md) | **架构总览**（拓扑图 / 链路图 / 组件职责 / 配置开关） |
+| [docs/distributed-spec.md](docs/distributed-spec.md) | 分布式多实例投递（presence + 实例间总线 + 会话亲和） |
+| [docs/reliability.md](docs/reliability.md) | 消息可靠性（幂等落库 + 死信队列） |
+| [docs/observability.md](docs/observability.md) | Prometheus + Grafana 可观测性 |
+| [docs/security.md](docs/security.md) | 接口限流与安全措施 |
+| [docs/websocket.md](docs/websocket.md) | WebSocket 连接生命周期与心跳 |
+| [docs/项目问答记录.md](docs/项目问答记录.md) | 面试问答（长文，含时效性提示） |
+
 ## 演示截图
 
 ### 聊天页

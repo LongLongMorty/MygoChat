@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: kamachat
+    # 业务服务通过 TLS 暴露 /prometheus（Prometheus 文本格式）
+    scheme: https
+    metrics_path: /prometheus
+    tls_config:
+      insecure_skip_verify: true
+    static_configs:
+      - targets: ["server:8000"]

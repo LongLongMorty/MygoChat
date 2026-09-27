@@ -1,11 +1,14 @@
 package https_server
 
 import (
+	"time"
+
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	v1 "kama_chat_server/api/v1"
 	"kama_chat_server/internal/config"
 	"kama_chat_server/internal/https_server/middleware"
+	"kama_chat_server/internal/metrics"
 	"kama_chat_server/internal/service/chat"
 	"kama_chat_server/pkg/ssl"
 )
@@ -33,10 +36,11 @@ func init() {
 	// /static/files 已移除公开路由，改用 GET /file/download?name=<filename>（需认证）
 
 	// === 公开路由（无需认证）===
-	GE.POST("/login", v1.Login)
-	GE.POST("/register", v1.Register)
-	GE.POST("/user/sendEmailCode", v1.SendEmailCode)
-	GE.POST("/user/emailLogin", v1.EmailLogin)
+	// 限流：按客户端 IP 固定窗口计数，防暴力破解与验证码滥发
+	GE.POST("/login", middleware.RateLimit("login", 20, time.Minute), v1.Login)
+	GE.POST("/register", middleware.RateLimit("register", 10, time.Minute), v1.Register)
+	GE.POST("/user/sendEmailCode", middleware.RateLimit("send_email_code", 5, time.Minute), v1.SendEmailCode)
+	GE.POST("/user/emailLogin", middleware.RateLimit("email_login", 20, time.Minute), v1.EmailLogin)
 	GE.GET("/wss", v1.WsLogin) // WebSocket 在 handler 内部校验 JWT
 
 	// === 运维路由（无需认证，仅限内网）===
@@ -51,11 +55,23 @@ func init() {
 			"session_queue_timeouts":      s.SessionQueueTimeouts,
 			"process_failures":            s.ProcessFailures,
 			"kafka_commit_failures":       s.KafkaCommitFailures,
+			"kafka_dlq_total":             s.KafkaDLQTotal,
 			"cache_queue_drops":           s.CacheQueueDrops,
 			"batch_flush_errors":          s.BatchFlushErrors,
 			"fanout_queue_drops":          s.FanoutQueueDrops,
+			"cross_node_publish":          s.CrossNodePublish,
+			"cross_node_publish_failures": s.CrossNodePublishFailures,
+			"cross_node_received":         s.CrossNodeReceived,
+			"cross_node_dedup_dropped":    s.CrossNodeDedupDropped,
+			"cross_node_lookup_failures":  s.CrossNodeLookupFailures,
+			"session_forwarded":           s.SessionForwarded,
+			"session_forward_failures":    s.SessionForwardFailures,
+			"session_forward_received":    s.SessionForwardReceived,
+			"ratelimit_blocked":           middleware.RateLimitBlockedTotal(),
 		})
 	})
+	// Prometheus 文本格式抓取端点（Go runtime + 进程 + 业务指标）
+	GE.GET("/prometheus", gin.WrapH(metrics.Handler()))
 
 	// === 认证路由（需要 JWT）===
 	authGroup := GE.Group("/")

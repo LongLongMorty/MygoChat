@@ -34,6 +34,7 @@ type IMessageProcessor interface {
 type MessageProcessor struct {
 	Clients        map[string]*Client
 	mutex          *sync.RWMutex
+	Distributor    *Distributor    // 本地优先 + 跨实例投递分发器
 	Fanout         *FanoutExecutor // 群消息写扩散扇出协程池
 	cacheTasks     chan func()
 	stopCache      chan struct{}
@@ -79,12 +80,14 @@ func parseFileSize(s string) int64 {
 
 // NewMessageProcessor 创建消息处理器
 func NewMessageProcessor(clients map[string]*Client, mutex *sync.RWMutex) *MessageProcessor {
+	distributor := NewDistributor(clients, mutex)
 	processor := &MessageProcessor{
-		Clients:    clients,
-		mutex:      mutex,
-		Fanout:     NewFanoutExecutor(clients, mutex),
-		cacheTasks: make(chan func(), cacheTaskQueueSize),
-		stopCache:  make(chan struct{}),
+		Clients:     clients,
+		mutex:       mutex,
+		Distributor: distributor,
+		Fanout:      NewFanoutExecutor(distributor),
+		cacheTasks:  make(chan func(), cacheTaskQueueSize),
+		stopCache:   make(chan struct{}),
 	}
 	go processor.runCacheWorker()
 	return processor
@@ -131,17 +134,32 @@ func (mp *MessageProcessor) enqueueCacheTask(task func()) {
 // ProcessMessage 处理一条原始 JSON 消息
 // data: 从 WebSocket 读取的原始 JSON 字节
 func (mp *MessageProcessor) ProcessMessage(data []byte) error {
-	return mp.processMessage(context.Background(), data, false)
+	return mp.processMessage(context.Background(), "", data, false)
 }
 
 // ProcessMessageAndWait is used by the Kafka path. It returns only after this
 // message's batch item has been durably written, so its offset can be committed
 // without depending on unrelated batch outcomes.
 func (mp *MessageProcessor) ProcessMessageAndWait(ctx context.Context, data []byte) error {
-	return mp.processMessage(ctx, data, true)
+	return mp.processMessage(ctx, "", data, true)
 }
 
-func (mp *MessageProcessor) processMessage(ctx context.Context, data []byte, waitForPersistence bool) error {
+// ProcessEnvelope 处理带幂等 ID 的消息（SessionRouter 优先调用）。
+// msgID 为空时回退为随机消息 uuid，兼容旧信封。
+func (mp *MessageProcessor) ProcessEnvelope(ctx context.Context, msgID string, data []byte, waitForPersistence bool) error {
+	return mp.processMessage(ctx, msgID, data, waitForPersistence)
+}
+
+// resolveMessageUUID 使用入口生成的固定幂等 ID 作为消息 uuid；
+// 同一信封被重投/重试时 uuid 不变，配合唯一索引 + OnConflict 实现幂等落库。
+func resolveMessageUUID(msgID string) string {
+	if msgID != "" {
+		return msgID
+	}
+	return fmt.Sprintf("M%s", random.GetNowAndLenRandomString(11))
+}
+
+func (mp *MessageProcessor) processMessage(ctx context.Context, msgID string, data []byte, waitForPersistence bool) error {
 	var chatMessageReq request.ChatMessageRequest
 	if err := json.Unmarshal(data, &chatMessageReq); err != nil {
 		return fmt.Errorf("parse chat message: %w", err)
@@ -149,20 +167,20 @@ func (mp *MessageProcessor) processMessage(ctx context.Context, data []byte, wai
 
 	switch chatMessageReq.Type {
 	case message_type_enum.Text:
-		return mp.processText(ctx, chatMessageReq, waitForPersistence)
+		return mp.processText(ctx, msgID, chatMessageReq, waitForPersistence)
 	case message_type_enum.File:
-		return mp.processFile(ctx, chatMessageReq, waitForPersistence)
+		return mp.processFile(ctx, msgID, chatMessageReq, waitForPersistence)
 	case message_type_enum.AudioOrVideo:
-		return mp.processAudioOrVideo(ctx, chatMessageReq, waitForPersistence)
+		return mp.processAudioOrVideo(ctx, msgID, chatMessageReq, waitForPersistence)
 	default:
 		return fmt.Errorf("unknown message type: %d", chatMessageReq.Type)
 	}
 }
 
 // processText 处理文本消息
-func (mp *MessageProcessor) processText(ctx context.Context, chatMessageReq request.ChatMessageRequest, waitForPersistence bool) error {
+func (mp *MessageProcessor) processText(ctx context.Context, msgID string, chatMessageReq request.ChatMessageRequest, waitForPersistence bool) error {
 	message := model.Message{
-		Uuid:       fmt.Sprintf("M%s", random.GetNowAndLenRandomString(11)),
+		Uuid:       resolveMessageUUID(msgID),
 		SessionId:  chatMessageReq.SessionId,
 		Type:       chatMessageReq.Type,
 		Content:    chatMessageReq.Content,
@@ -195,9 +213,9 @@ func (mp *MessageProcessor) processText(ctx context.Context, chatMessageReq requ
 }
 
 // processFile 处理文件消息
-func (mp *MessageProcessor) processFile(ctx context.Context, chatMessageReq request.ChatMessageRequest, waitForPersistence bool) error {
+func (mp *MessageProcessor) processFile(ctx context.Context, msgID string, chatMessageReq request.ChatMessageRequest, waitForPersistence bool) error {
 	message := model.Message{
-		Uuid:          fmt.Sprintf("M%s", random.GetNowAndLenRandomString(11)),
+		Uuid:          resolveMessageUUID(msgID),
 		SessionId:     chatMessageReq.SessionId,
 		Type:          chatMessageReq.Type,
 		Content:       "",
@@ -235,7 +253,7 @@ func (mp *MessageProcessor) processFile(ctx context.Context, chatMessageReq requ
 }
 
 // processAudioOrVideo 处理音视频通话信令
-func (mp *MessageProcessor) processAudioOrVideo(ctx context.Context, chatMessageReq request.ChatMessageRequest, waitForPersistence bool) error {
+func (mp *MessageProcessor) processAudioOrVideo(ctx context.Context, msgID string, chatMessageReq request.ChatMessageRequest, waitForPersistence bool) error {
 	// 信令是瞬时数据：超长 payload 视为异常，拒绝处理
 	if len(chatMessageReq.AVdata) > maxAVDataSize {
 		return fmt.Errorf("av_data exceeds %d bytes limit", maxAVDataSize)
@@ -246,7 +264,7 @@ func (mp *MessageProcessor) processAudioOrVideo(ctx context.Context, chatMessage
 	}
 
 	message := model.Message{
-		Uuid:       fmt.Sprintf("M%s", random.GetNowAndLenRandomString(11)),
+		Uuid:       resolveMessageUUID(msgID),
 		SessionId:  chatMessageReq.SessionId,
 		Type:       chatMessageReq.Type,
 		Content:    "",
@@ -299,11 +317,7 @@ func (mp *MessageProcessor) processAudioOrVideo(ctx context.Context, chatMessage
 			Message: jsonMessage,
 			Uuid:    message.Uuid,
 		}
-		if receiveClient := mp.getClient(message.ReceiveId); receiveClient != nil {
-			if err := receiveClient.EnqueueDelivery(messageBack); err != nil {
-				zlog.Warn(fmt.Sprintf("用户 %s 音视频信令未实时送达: %v", message.ReceiveId, err))
-			}
-		}
+		mp.Distributor.Deliver([]string{message.ReceiveId}, messageBack, message.Uuid)
 	}
 	return nil
 }
@@ -349,18 +363,9 @@ func (mp *MessageProcessor) forwardToUser(message model.Message, rawAvatar strin
 		Uuid:    message.Uuid,
 	}
 
-	// Do not hold the shared client-map lock while waiting for an outbound
-	// queue. Slow clients must not block unrelated logins or deliveries.
-	if receiveClient := mp.getClient(message.ReceiveId); receiveClient != nil {
-		if err := receiveClient.EnqueueDelivery(messageBack); err != nil {
-			zlog.Warn(fmt.Sprintf("用户 %s 消息未实时送达: %v", message.ReceiveId, err))
-		}
-	}
-	if sendClient := mp.getClient(message.SendId); sendClient != nil {
-		if err := sendClient.EnqueueDelivery(messageBack); err != nil {
-			zlog.Warn(fmt.Sprintf("用户 %s 回显未实时送达: %v", message.SendId, err))
-		}
-	}
+	// 投递分发：本机接收方/发送方直投，异地目标经 presence 定位后跨实例转发。
+	// Distributor 内部先取本地引用再释放锁，慢客户端不会阻塞其它登录/投递。
+	mp.Distributor.Deliver([]string{message.ReceiveId, message.SendId}, messageBack, message.Uuid)
 
 	// Redis is a cache, not the durability boundary. Keep its network and JSON
 	// work out of the ordered message-processing path.
@@ -401,13 +406,6 @@ func (mp *MessageProcessor) forwardToGroup(message model.Message, rawAvatar stri
 	mp.enqueueCacheTask(func() {
 		mp.updateGroupMessageCache(message, messageRsp)
 	})
-}
-
-func (mp *MessageProcessor) getClient(uuid string) *Client {
-	mp.mutex.RLock()
-	client := mp.Clients[uuid]
-	mp.mutex.RUnlock()
-	return client
 }
 
 // updateUserMessageCache 更新私聊消息 Redis 缓存

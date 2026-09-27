@@ -1,0 +1,116 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 0,
+  "links": [],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["kamachat"],
+  "templating": { "list": [] },
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "KamaChat 概览",
+  "uid": "kamachat-overview",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "在线客户端",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [{ "refId": "A", "expr": "kamachat_online_clients" }]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "活跃会话",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [{ "refId": "A", "expr": "kamachat_active_sessions" }]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Goroutine",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [{ "refId": "A", "expr": "go_goroutines" }]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "堆内存",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [{ "refId": "A", "expr": "go_memstats_heap_alloc_bytes" }]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "路由吞吐 (msg/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "rate(kamachat_channel_routed_total[1m])", "legendFormat": "channel" },
+        { "refId": "B", "expr": "rate(kamachat_kafka_routed_total[1m])", "legendFormat": "kafka" },
+        { "refId": "C", "expr": "rate(kamachat_batch_flushed_total[1m])", "legendFormat": "persisted" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Channel 深度 / 容量",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "kamachat_channel_depth", "legendFormat": "depth" },
+        { "refId": "B", "expr": "kamachat_channel_capacity", "legendFormat": "capacity" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "失败/异常速率",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "rate(kamachat_process_failures_total[1m])", "legendFormat": "process_failures" },
+        { "refId": "B", "expr": "rate(kamachat_batch_flush_errors_total[1m])", "legendFormat": "batch_flush_errors" },
+        { "refId": "C", "expr": "rate(kamachat_kafka_commit_failures_total[1m])", "legendFormat": "kafka_commit_failures" },
+        { "refId": "D", "expr": "rate(kamachat_kafka_dlq_total[1m])", "legendFormat": "kafka_dlq" },
+        { "refId": "E", "expr": "rate(kamachat_session_queue_timeouts_total[1m])", "legendFormat": "session_queue_timeouts" }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "分布式投递 / 会话亲和 (次/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "rate(kamachat_cross_node_publish_total[1m])", "legendFormat": "cross_node_publish" },
+        { "refId": "B", "expr": "rate(kamachat_cross_node_received_total[1m])", "legendFormat": "cross_node_received" },
+        { "refId": "C", "expr": "rate(kamachat_session_forwarded_total[1m])", "legendFormat": "session_forwarded" },
+        { "refId": "D", "expr": "rate(kamachat_cross_node_dedup_dropped_total[1m])", "legendFormat": "dedup_dropped" }
+      ]
+    }
+  ]
+}

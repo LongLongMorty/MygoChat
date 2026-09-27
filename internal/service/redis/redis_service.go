@@ -37,6 +37,11 @@ func SetKeyEx(key string, value string, timeout time.Duration) error {
 	return nil
 }
 
+// Incr 原子自增 key 的整数值（key 不存在时从 0 自增到 1），用于固定窗口限流计数。
+func Incr(key string) (int64, error) {
+	return redisClient.Incr(ctx, key).Result()
+}
+
 // SetNX 原子设置 key（仅当 key 不存在时），返回是否设置成功。
 // 对应 Redis 的 SET key value NX EX timeout，用于防并发抢占场景。
 func SetNX(key string, value string, timeout time.Duration) (bool, error) {
@@ -89,6 +94,24 @@ func GetKeyNilIsErr(key string) (string, error) {
 		return "", err
 	}
 	return value, nil
+}
+
+// ScanKeys 返回所有匹配 prefix* 的完整 key（SCAN 迭代，避免 KEYS 阻塞 Redis）。
+func ScanKeys(prefix string) ([]string, error) {
+	var keys []string
+	var cursor uint64
+	for {
+		ks, c, err := redisClient.Scan(ctx, cursor, prefix+"*", 100).Result()
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, ks...)
+		cursor = c
+		if cursor == 0 {
+			break
+		}
+	}
+	return keys, nil
 }
 
 func GetKeyWithPrefixNilIsErr(prefix string) (string, error) {
@@ -231,6 +254,81 @@ func DelKeysWithSuffix(suffix string) error {
 		}
 	}
 	return nil
+}
+
+// MGet 批量读取多个 key（对应 Redis MGET）。
+// 返回切片与 keys 等长，key 不存在时对应元素为空字符串。
+// 用于分布式在线路由表的一次性批量定位（避免逐条 GET）。
+func MGet(keys []string) ([]string, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	values, err := redisClient.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, len(values))
+	for i, v := range values {
+		if v == nil {
+			continue
+		}
+		if s, ok := v.(string); ok {
+			result[i] = s
+		}
+	}
+	return result, nil
+}
+
+// --- Redis Stream 操作（分布式实例间投递总线）---
+
+// XGroupCreateMkStream 创建消费组（stream 不存在则自动创建）。
+// BUSYGROUP 表示组已存在，调用方应忽略。
+func XGroupCreateMkStream(stream, group string) error {
+	return redisClient.XGroupCreateMkStream(ctx, stream, group, "$").Err()
+}
+
+// XAddMessage 向 stream 追加一条消息，使用 MAXLEN ~ maxLen 近似裁剪防止无限增长。
+func XAddMessage(stream string, key string, value string, maxLen int64) error {
+	args := &redis.XAddArgs{
+		Stream: stream,
+		Values: map[string]interface{}{key: value},
+	}
+	if maxLen > 0 {
+		args.MaxLen = maxLen
+		args.Approx = true
+	}
+	return redisClient.XAdd(ctx, args).Err()
+}
+
+// XReadGroupMessages 以消费组身份读取 stream。
+// streamID 用 ">" 读取从未投递的新消息；用 "0" 读取本消费者已投递但未 ack 的 pending。
+// block < 0 时不下发 BLOCK 选项（非阻塞）；无消息时返回空切片且无错误。
+func XReadGroupMessages(stream, group, consumer, streamID string, count int64, block time.Duration) ([]redis.XMessage, error) {
+	res, err := redisClient.XReadGroup(ctx, &redis.XReadGroupArgs{
+		Group:    group,
+		Consumer: consumer,
+		Streams:  []string{stream, streamID},
+		Count:    count,
+		Block:    block,
+	}).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if len(res) == 0 {
+		return nil, nil
+	}
+	return res[0].Messages, nil
+}
+
+// XAck 确认（删除）消费组 pending 中的消息。
+func XAck(stream, group string, ids ...string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return redisClient.XAck(ctx, stream, group, ids...).Err()
 }
 
 func DeleteAllRedisKeys() error {

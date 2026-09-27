@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/go-redis/redis/v8"
-	"github.com/gorilla/websocket"
 	"kama_chat_server/internal/dao"
 	"kama_chat_server/internal/dto/request"
 	"kama_chat_server/internal/dto/respond"
@@ -444,10 +443,7 @@ func (k *KafkaServer) Start() {
 				k.Clients[client.Uuid] = client
 				k.mutex.Unlock()
 				zlog.Debug(fmt.Sprintf("欢迎来到kama聊天服务器，亲爱的用户%s\n", client.Uuid))
-				err := client.Conn.WriteMessage(websocket.TextMessage, []byte("欢迎来到kama聊天服务器"))
-				if err != nil {
-					zlog.Error(err.Error())
-				}
+				_ = client.EnqueueDelivery(&MessageBack{Message: []byte("欢迎来到kama聊天服务器")})
 			}
 
 		case client := <-k.Logout:
@@ -456,9 +452,7 @@ func (k *KafkaServer) Start() {
 				delete(k.Clients, client.Uuid)
 				k.mutex.Unlock()
 				zlog.Info(fmt.Sprintf("用户%s退出登录\n", client.Uuid))
-				if err := client.Conn.WriteMessage(websocket.TextMessage, []byte("已退出登录")); err != nil {
-					zlog.Error(err.Error())
-				}
+				_ = client.EnqueueDelivery(&MessageBack{Message: []byte("已退出登录")})
 			}
 		}
 	}

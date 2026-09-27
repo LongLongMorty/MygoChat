@@ -2,6 +2,8 @@ package chat
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,16 +13,19 @@ import (
 
 	"kama_chat_server/internal/config"
 	myKafka "kama_chat_server/internal/service/kafka"
+	"kama_chat_server/internal/service/transport"
 	"kama_chat_server/pkg/constants"
+	"kama_chat_server/pkg/util/random"
 	"kama_chat_server/pkg/zlog"
 
-	"github.com/gorilla/websocket"
 	"github.com/segmentio/kafka-go"
 )
 
-// MessageEnvelope 消息信封，包含全局序号以保证发送顺序
+// MessageEnvelope 消息信封，包含会话内序号以保证发送顺序，
+// 并携带稳定的消息幂等 ID（入口处生成一次，Kafka 重投/重试保持不变）。
 type MessageEnvelope struct {
-	SeqNum  uint64 `json:"seq_num"` // 全局递增序号
+	SeqNum  uint64 `json:"seq_num"` // 会话内递增序号
+	MsgID   string `json:"msg_id"`  // 幂等消息 ID，重投不变
 	Payload []byte `json:"payload"` // 原始消息内容
 }
 
@@ -49,6 +54,18 @@ type HybridRouter struct {
 	// 每会话独立的消息序号生成器（保证会话内发送顺序）
 	sessionSeqNums map[string]*atomic.Uint64
 	seqMutex       *sync.RWMutex
+
+	// 分布式（多实例）投递：在线路由表 + 实例间总线
+	clusterEnabled bool
+	instanceID     string
+	presence       PresenceRegistry
+	bus            ClusterBus
+	clusterQuit    chan struct{}
+	clusterOnce    sync.Once
+
+	// 会话亲和：同一会话固定由哈希环选中的实例处理，保证跨实例顺序
+	affinityEnabled bool
+	ring            *SessionRing
 }
 
 var HybridChatRouter *HybridRouter
@@ -82,6 +99,113 @@ func init() {
 		// 背压解除后（channel 低水位持续 10 秒冷却），清空黏滞 session 路由状态
 		// 此时 Kafka 积压消息已被消费完毕，可安全切回 channel
 		HybridChatRouter.Detector.SetOverflowEndCallback(HybridChatRouter.ClearSessionRouting)
+	}
+}
+
+// EnableCluster 启用多实例投递：注入实例标识、在线路由表与实例间总线，
+// 开启分发器的跨实例能力，并启动总线消费与 presence 心跳。
+// 必须在 Start() 之前调用；未调用时保持单实例行为。
+func (h *HybridRouter) EnableCluster(instanceID string, presence PresenceRegistry, bus *transport.InstanceBus, heartbeatInterval time.Duration, sessionAffinity bool) {
+	h.instanceID = instanceID
+	h.presence = presence
+	h.bus = bus
+	h.clusterEnabled = true
+	h.affinityEnabled = sessionAffinity
+	if sessionAffinity {
+		h.ring = NewSessionRing(0)
+	}
+	h.clusterQuit = make(chan struct{})
+	h.Processor.Distributor.Enable(instanceID, presence, bus)
+
+	go h.bus.Run(h.handleBusMessage)
+	go h.startPresenceHeartbeat(heartbeatInterval)
+	if sessionAffinity {
+		go h.startInstanceRefresh(heartbeatInterval)
+	}
+	zlog.Info(fmt.Sprintf("HybridRouter 分布式投递已启用，实例: %s，会话亲和: %v", instanceID, sessionAffinity))
+}
+
+// handleBusMessage 处理来自其它实例的实例间消息：按类型分发。
+func (h *HybridRouter) handleBusMessage(msg *transport.BusMessage) error {
+	if msg == nil {
+		return nil
+	}
+	switch msg.Type {
+	case transport.BusTypeSession:
+		if msg.Session == nil {
+			return nil
+		}
+		ChatMetrics.sessionForwardReceived.Add(1)
+		// 归属实例：分配序号并本地处理（保证该会话在此实例内串行有序）
+		return h.processLocal(msg.Session.SessionID, msg.Session.Payload)
+	case transport.BusTypeDeliver:
+		return h.Processor.Distributor.DeliverLocalBatch(msg.Deliver)
+	default:
+		zlog.Warn("未知实例间消息类型: " + msg.Type)
+		return nil
+	}
+}
+
+// startInstanceRefresh 周期性刷新存活实例列表并重建哈希环。
+func (h *HybridRouter) startInstanceRefresh(interval time.Duration) {
+	if interval <= 0 {
+		interval = 20 * time.Second
+	}
+	h.refreshSessionRing()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-h.clusterQuit:
+			return
+		case <-ticker.C:
+			h.refreshSessionRing()
+		}
+	}
+}
+
+// refreshSessionRing 从在线实例注册表拉取存活实例，重建哈希环。
+func (h *HybridRouter) refreshSessionRing() {
+	instances, err := h.presence.LiveInstances()
+	if err != nil {
+		zlog.Warn("刷新存活实例失败: " + err.Error())
+		return
+	}
+	h.ring.SetInstances(instances)
+}
+
+// startPresenceHeartbeat 周期性续期本机在线用户的 presence TTL。
+// 先快照 UUID 再访问 Redis，避免持锁进行网络 IO。
+func (h *HybridRouter) startPresenceHeartbeat(interval time.Duration) {
+	if interval <= 0 {
+		interval = 20 * time.Second
+	}
+	// 立即注册一次，避免首次心跳前的窗口期
+	if err := h.presence.RegisterInstance(); err != nil {
+		zlog.Warn("实例注册失败: " + err.Error())
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-h.clusterQuit:
+			return
+		case <-ticker.C:
+			if err := h.presence.RegisterInstance(); err != nil {
+				zlog.Warn("实例注册续期失败: " + err.Error())
+			}
+			h.mutex.RLock()
+			uuids := make([]string, 0, len(h.Clients))
+			for uuid := range h.Clients {
+				uuids = append(uuids, uuid)
+			}
+			h.mutex.RUnlock()
+			for _, uuid := range uuids {
+				if err := h.presence.Register(uuid); err != nil {
+					zlog.Warn("presence 心跳续期失败: " + err.Error())
+				}
+			}
+		}
 	}
 }
 
@@ -137,19 +261,26 @@ func (h *HybridRouter) Start() {
 			h.mutex.Lock()
 			h.Clients[client.Uuid] = client
 			h.mutex.Unlock()
-			zlog.Debug(fmt.Sprintf("欢迎来到 kama 聊天服务器，用户 %s", client.Uuid))
-			if err := client.Conn.WriteMessage(websocket.TextMessage, []byte("欢迎来到 kama 聊天服务器")); err != nil {
-				zlog.Error(err.Error())
+			if h.clusterEnabled {
+				if err := h.presence.Register(client.Uuid); err != nil {
+					zlog.Warn("presence 注册失败: " + err.Error())
+				}
 			}
+			zlog.Debug(fmt.Sprintf("欢迎来到 kama 聊天服务器，用户 %s", client.Uuid))
+			// 统一走 SendBack，避免与 Write goroutine 的心跳 ping 并发写同一连接
+			_ = client.EnqueueDelivery(&MessageBack{Message: []byte("欢迎来到 kama 聊天服务器")})
 
 		case client := <-h.Logout:
 			h.mutex.Lock()
 			delete(h.Clients, client.Uuid)
 			h.mutex.Unlock()
-			zlog.Info(fmt.Sprintf("用户 %s 退出登录", client.Uuid))
-			if err := client.Conn.WriteMessage(websocket.TextMessage, []byte("已退出登录")); err != nil {
-				zlog.Error(err.Error())
+			if h.clusterEnabled {
+				if err := h.presence.Unregister(client.Uuid); err != nil {
+					zlog.Warn("presence 注销失败: " + err.Error())
+				}
 			}
+			zlog.Info(fmt.Sprintf("用户 %s 退出登录", client.Uuid))
+			_ = client.EnqueueDelivery(&MessageBack{Message: []byte("已退出登录")})
 
 		case data := <-h.Transmit:
 			// channel 路径：通过会话路由器处理，保证会话内顺序
@@ -198,6 +329,15 @@ func (h *HybridRouter) consumeKafkaMessages() {
 		kafkaBatchSize   = 200   // 单批拉取消息数
 		batchFetchWindow = 200   // 批量拉取的 Fetch 次数上限（一次性快速拉满整批）
 	)
+	// 死信策略：同一批处理连续失败达到上限则转投 DLQ 并提交 offset，
+	// 避免毒消息无限重试阻塞分区。DLQTopic 为空时禁用（保持原无限重试）。
+	kafkaConfig := config.GetConfig().KafkaConfig
+	maxProcessAttempts := kafkaConfig.MaxProcessRetries
+	if maxProcessAttempts <= 0 {
+		maxProcessAttempts = 5
+	}
+	dlqEnabled := kafkaConfig.DLQTopic != ""
+
 	restartDelay := 1 * time.Second
 
 	// 外层循环：自动恢复 panic
@@ -226,7 +366,8 @@ func (h *HybridRouter) consumeKafkaMessages() {
 			restartDelay = 1 * time.Second
 
 			var (
-				retryCount = 0
+				retryCount      = 0
+				processAttempts = 0 // 当前批处理连续失败次数，达到上限转 DLQ
 			)
 
 			for {
@@ -281,10 +422,31 @@ func (h *HybridRouter) consumeKafkaMessages() {
 					err := h.SessionRouter.EnqueueMessagesAndWait(processCtx, payloads)
 					cancel()
 					if err != nil {
-						zlog.Error("Kafka 批量消息处理失败，重试整批: " + err.Error())
+						processAttempts++
+						// 达到重试上限：转投死信主题后提交 offset，放行后续消息
+						if dlqEnabled && processAttempts >= maxProcessAttempts {
+							if dlqErr := myKafka.KafkaService.SendToDLQ(batch, err, processAttempts); dlqErr != nil {
+								// DLQ 写入失败不能提交 offset，继续重试整批，避免丢失
+								zlog.Error("写入死信主题失败，继续重试整批: " + dlqErr.Error())
+								time.Sleep(baseDelay)
+								continue
+							}
+							ChatMetrics.kafkaDLQTotal.Add(1)
+							zlog.Error(fmt.Sprintf("批处理达最大重试 %d 次，转投死信主题偏移 %d-%d: %v",
+								processAttempts, batch[0].Offset, batch[len(batch)-1].Offset, err))
+							if commitErr := myKafka.KafkaService.ChatReader.CommitMessages(context.Background(), batch...); commitErr != nil {
+								ChatMetrics.kafkaCommitFailures.Add(1)
+								zlog.Error("死信转投后 offset 提交失败，下轮将重放（幂等去重）: " + commitErr.Error())
+							}
+							processAttempts = 0
+							continue
+						}
+						zlog.Error(fmt.Sprintf("Kafka 批量消息处理失败，重试整批 (%d/%d): %v",
+							processAttempts, maxProcessAttempts, err))
 						time.Sleep(baseDelay)
 						continue
 					}
+					processAttempts = 0
 
 					// 3. 批量提交 offset（提交本批最后一条即覆盖整批）
 					//    kafka-go 的 CommitMessages 支持多条，提交最高位点
@@ -322,10 +484,58 @@ func (h *HybridRouter) SendMessage(data []byte) error {
 		return fmt.Errorf("消息缺少 session_id")
 	}
 
+	// 会话亲和：非归属实例把原始消息转发给归属实例统一处理，
+	// 保证同一会话在整个集群内由单一实例串行处理（序号不冲突、顺序不乱）。
+	if h.affinityEnabled && h.ring != nil {
+		if home := h.ring.Home(sessionId); home != "" && home != h.instanceID {
+			return h.forwardSessionToHome(home, sessionId, data)
+		}
+	}
+	return h.processLocal(sessionId, data)
+}
+
+// forwardSessionToHome 把原始消息转发到会话归属实例处理。
+// 转发失败时回退本地处理，保证可用性（该会话此条消息可能牺牲跨实例顺序）。
+func (h *HybridRouter) forwardSessionToHome(home, sessionId string, data []byte) error {
+	env := &transport.BusMessage{
+		Type:    transport.BusTypeSession,
+		Session: &transport.SessionForward{SessionID: sessionId, Payload: data},
+	}
+	if err := h.bus.Publish(home, env); err != nil {
+		ChatMetrics.sessionForwardFailures.Add(1)
+		zlog.Warn(fmt.Sprintf("会话 %s 转发到 %s 失败，回退本地处理: %v", sessionId, home, err))
+		return h.processLocal(sessionId, data)
+	}
+	ChatMetrics.sessionForwarded.Add(1)
+	return nil
+}
+
+// deriveMsgID 生成稳定的消息幂等 ID：
+// 客户端提供 client_msg_id 时按 (send_id, client_msg_id) 派生，使客户端重试/重复发送
+// 得到同一 ID，实现端到端去重；为空则生成随机 ID。返回值 <= char(20)。
+func deriveMsgID(sendID, clientMsgID string) string {
+	if clientMsgID == "" {
+		return fmt.Sprintf("M%s", random.GetNowAndLenRandomString(11))
+	}
+	sum := sha256.Sum256([]byte(sendID + "|" + clientMsgID))
+	return "M" + hex.EncodeToString(sum[:])[:16]
+}
+
+// processLocal 为会话分配序号并投递：channel 优先，背压溢出时走 Kafka。
+func (h *HybridRouter) processLocal(sessionId string, data []byte) error {
 	// 分配该会话的独立序号（每个会话从1开始递增）
 	seqNum := h.getOrCreateSessionSeq(sessionId).Add(1)
+	// 幂等 ID 仅在入口生成一次：客户端携带 client_msg_id 时按其派生（客户端重试去重），
+	// 否则随机生成。Kafka 重投/批量重试携带同一 ID，落库时以 uuid 唯一约束 +
+	// ON CONFLICT DO NOTHING 去重，避免重复消息。
+	var meta struct {
+		SendId      string `json:"send_id"`
+		ClientMsgId string `json:"client_msg_id"`
+	}
+	_ = json.Unmarshal(data, &meta)
 	envelope := MessageEnvelope{
 		SeqNum:  seqNum,
+		MsgID:   deriveMsgID(meta.SendId, meta.ClientMsgId),
 		Payload: data,
 	}
 	envelopeData, err := json.Marshal(envelope)
@@ -462,6 +672,26 @@ func (h *HybridRouter) startStickySessionCleanup() {
 // Close 关闭路由器
 // Close 关闭路由器
 func (h *HybridRouter) Close() {
+	// 分布式：先注销本机在线路由（避免对端继续向本实例转发），再停总线
+	if h.clusterEnabled {
+		h.clusterOnce.Do(func() {
+			if h.clusterQuit != nil {
+				close(h.clusterQuit)
+			}
+			if h.bus != nil {
+				h.bus.Stop()
+			}
+		})
+		h.mutex.RLock()
+		uuids := make([]string, 0, len(h.Clients))
+		for uuid := range h.Clients {
+			uuids = append(uuids, uuid)
+		}
+		h.mutex.RUnlock()
+		for _, uuid := range uuids {
+			_ = h.presence.Unregister(uuid)
+		}
+	}
 	h.Detector.Stop()
 	h.SessionRouter.Close()
 	h.Processor.Close()
@@ -488,11 +718,23 @@ func (h *HybridRouter) SendClientToLogout(client *Client) {
 	h.mutex.Unlock()
 }
 
+// OnlineClients 返回本实例在线客户端数量（供指标采集）。
+func (h *HybridRouter) OnlineClients() int {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
+	return len(h.Clients)
+}
+
 // RemoveClient 移除客户端
 func (h *HybridRouter) RemoveClient(uuid string) {
 	h.mutex.Lock()
 	delete(h.Clients, uuid)
 	h.mutex.Unlock()
+	if h.clusterEnabled {
+		if err := h.presence.Unregister(uuid); err != nil {
+			zlog.Warn("presence 注销失败: " + err.Error())
+		}
+	}
 }
 
 // ensureJSONValid 确保 JSON 有效（用于调试）

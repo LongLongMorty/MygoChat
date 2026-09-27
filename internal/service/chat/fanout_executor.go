@@ -30,20 +30,18 @@ type fanoutTask struct {
 // 同一 FIFO 队列，由该 worker 串行投递 → 群内消息到达顺序 = 入队顺序，
 // 与改造前"会话 worker 同步扇出"的顺序语义一致。
 type FanoutExecutor struct {
-	workers   []chan *fanoutTask
-	clients   map[string]*Client
-	mutex     *sync.RWMutex
-	quit      chan struct{}
-	closeOnce sync.Once
+	workers     []chan *fanoutTask
+	distributor *Distributor // 本地优先 + 跨实例投递分发器
+	quit        chan struct{}
+	closeOnce   sync.Once
 }
 
 // NewFanoutExecutor 创建扇出协程池并启动全部 worker
-func NewFanoutExecutor(clients map[string]*Client, mutex *sync.RWMutex) *FanoutExecutor {
+func NewFanoutExecutor(distributor *Distributor) *FanoutExecutor {
 	fe := &FanoutExecutor{
-		workers: make([]chan *fanoutTask, fanoutWorkerCount),
-		clients: clients,
-		mutex:   mutex,
-		quit:    make(chan struct{}),
+		workers:     make([]chan *fanoutTask, fanoutWorkerCount),
+		distributor: distributor,
+		quit:        make(chan struct{}),
 	}
 	for i := 0; i < fanoutWorkerCount; i++ {
 		fe.workers[i] = make(chan *fanoutTask, fanoutQueueSize)
@@ -84,27 +82,16 @@ func (fe *FanoutExecutor) worker(id int) {
 	}
 }
 
-// fanout 执行写扩散：取成员（Redis Set 缓存，miss 才查 DB）→
-// 锁内快照在线客户端引用 → 锁外逐个投递（防慢客户端卡住 map 锁）
+// fanout 执行写扩散：取成员（Redis Set 缓存，miss 才查 DB）后交给 Distributor。
+// Distributor 本地命中直投，异地成员按实例聚合后一次转发（远程发布次数由
+// O(成员数) 收敛为 O(实例数)）。
 func (fe *FanoutExecutor) fanout(task *fanoutTask) {
 	members, err := getActiveGroupMemberIDs(task.groupId)
 	if err != nil {
 		zlog.Error("扇出获取群成员失败: " + err.Error())
 		return
 	}
-	targets := make([]*Client, 0, len(members))
-	fe.mutex.RLock()
-	for _, member := range members {
-		if client, ok := fe.clients[member]; ok {
-			targets = append(targets, client)
-		}
-	}
-	fe.mutex.RUnlock()
-	for _, client := range targets {
-		if err := client.EnqueueDelivery(task.messageBack); err != nil {
-			zlog.Warn("群扇出投递失败: " + err.Error())
-		}
-	}
+	fe.distributor.Deliver(members, task.messageBack, task.messageBack.Uuid)
 }
 
 // Close 停止全部 worker（排空已入队任务由 worker 的 quit 分支丢弃剩余）

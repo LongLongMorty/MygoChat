@@ -15,4 +15,7 @@ type ChatMessageRequest struct {
 	FileType      string `json:"file_type"`
 	FileName      string `json:"file_name"`
 	AVdata        string `json:"av_data"`
+	// ClientMsgId 客户端生成的幂等键（可选）。同一用户重试发送时保持不变，
+	// 服务端据此派生稳定消息 ID，实现端到端去重；为空则服务端生成随机 ID。
+	ClientMsgId string `json:"client_msg_id"`
 }

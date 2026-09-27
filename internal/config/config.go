@@ -55,11 +55,29 @@ type KafkaConfig struct {
 	AllowAutoTopicCreation bool          `toml:"allowAutoTopicCreation"`
 	Partition              int           `toml:"partition"`
 	Timeout                time.Duration `toml:"timeout"`
+	// DLQTopic 死信主题：批处理连续失败达到上限后，将整批转投此主题并提交 offset，
+	// 避免毒消息无限重试阻塞分区。为空则禁用 DLQ（保持原无限重试行为）。
+	DLQTopic string `toml:"dlqTopic"`
+	// MaxProcessRetries 同一批消息处理失败的最大重试次数，超过则转 DLQ
+	MaxProcessRetries int `toml:"maxProcessRetries"`
 }
 
 type StaticSrcConfig struct {
 	StaticAvatarPath string `toml:"staticAvatarPath"`
 	StaticFilePath   string `toml:"staticFilePath"`
+}
+
+// ClusterConfig 多实例（分布式）投递配置。
+// enabled=false 时行为与单实例完全一致。
+type ClusterConfig struct {
+	Enabled            bool   `toml:"enabled"`
+	InstanceID         string `toml:"instanceId"`
+	PresenceTTLSeconds int    `toml:"presenceTTLSeconds"`
+	HeartbeatSeconds   int    `toml:"heartbeatSeconds"`
+	StreamMaxLen       int64  `toml:"streamMaxLen"`
+	// SessionAffinity 开启后，同一会话的所有消息按一致性哈希固定由某个实例处理，
+	// 把单实例内的会话顺序保证扩展到跨实例。默认关闭。
+	SessionAffinity bool `toml:"sessionAffinity"`
 }
 
 type Config struct {
@@ -70,6 +88,7 @@ type Config struct {
 	LogConfig       `toml:"logConfig"`
 	KafkaConfig     `toml:"kafkaConfig"`
 	StaticSrcConfig `toml:"staticSrcConfig"`
+	ClusterConfig   `toml:"clusterConfig"`
 }
 
 var config *Config
@@ -150,10 +169,50 @@ func LoadConfig() error {
 	if v := os.Getenv("KAMA_KAFKA_MESSAGE_MODE"); v != "" {
 		config.KafkaConfig.MessageMode = v
 	}
+	if v := os.Getenv("KAMA_KAFKA_DLQ_TOPIC"); v != "" {
+		config.KafkaConfig.DLQTopic = v
+	}
+	if v := os.Getenv("KAMA_KAFKA_MAX_PROCESS_RETRIES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			config.KafkaConfig.MaxProcessRetries = n
+		}
+	}
+	// DLQ 缺省值：空则用默认主题名；重试上限默认 5
+	if config.KafkaConfig.DLQTopic == "" {
+		config.KafkaConfig.DLQTopic = "chat_message_dlq"
+	}
+	if config.KafkaConfig.MaxProcessRetries <= 0 {
+		config.KafkaConfig.MaxProcessRetries = 5
+	}
 
 	// 容器化：主服务监听地址覆盖（Docker 内须绑定 0.0.0.0 才能端口映射到宿主机）
 	if v := os.Getenv("KAMA_MAIN_HOST"); v != "" {
 		config.MainConfig.Host = v
+	}
+
+	// 集群（多实例）配置覆盖
+	if v := os.Getenv("KAMA_CLUSTER_ENABLED"); v != "" {
+		if enabled, err := strconv.ParseBool(v); err == nil {
+			config.ClusterConfig.Enabled = enabled
+		}
+	}
+	if v := os.Getenv("KAMA_INSTANCE_ID"); v != "" {
+		config.ClusterConfig.InstanceID = v
+	}
+	if v := os.Getenv("KAMA_SESSION_AFFINITY"); v != "" {
+		if affinity, err := strconv.ParseBool(v); err == nil {
+			config.ClusterConfig.SessionAffinity = affinity
+		}
+	}
+	// 缺省值兜底：配置缺项时不至于 TTL 为 0 导致 presence 立刻过期
+	if config.ClusterConfig.PresenceTTLSeconds <= 0 {
+		config.ClusterConfig.PresenceTTLSeconds = 60
+	}
+	if config.ClusterConfig.HeartbeatSeconds <= 0 {
+		config.ClusterConfig.HeartbeatSeconds = 20
+	}
+	if config.ClusterConfig.StreamMaxLen <= 0 {
+		config.ClusterConfig.StreamMaxLen = 10000
 	}
 
 	return nil
