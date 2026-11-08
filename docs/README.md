@@ -36,6 +36,12 @@ KamaChat 是基于 **Go + WebSocket + Kafka + Redis + MySQL** 的即时通信服
 | --- | --- | --- |
 | [项目问答记录.md](项目问答记录.md) | 面试问答（长文） | 结合代码讲解架构/数据库/Kafka/WebSocket 等；**时效性提示见文首** |
 
+## 协作规范
+
+| 文档 | 主题 | 说明 |
+| --- | --- | --- |
+| [commit-convention.md](commit-convention.md) | 提交规范 | Conventional Commits 1.0.0 + AI `Co-Authored-By` 准则、PowerShell 提交注意 |
+
 ## 阅读顺序建议
 
 1. 根目录 [README](../README.md)：项目总览、架构亮点、快速开始、API。
