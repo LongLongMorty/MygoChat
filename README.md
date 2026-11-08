@@ -86,6 +86,7 @@ Distributor ────┤                                             ├─�
 ### 安全加固
 
 - **接口限流**：`/login`、`/register`、`/user/sendEmailCode`、`/user/emailLogin` 按客户端 IP 固定窗口限流（Redis `INCR`+`EXPIRE`，fail-open），防暴力破解与验证码滥发；指标 `kamachat_http_ratelimit_blocked_total`
+- **WS 发送鉴权**：强制 `send_id = JWT uuid`（防冒充）、发送前校验好友关系/群成员身份（防越权）
 - JWT (HS256) + bcrypt、邮箱 `(email, deleted_at)` 唯一索引、验证码一次性消费、禁用用户存量 token 即时失效、CORS 白名单、文件下载鉴权、上传类型/内容检测
 - 详见 [docs/security.md](docs/security.md)
 
