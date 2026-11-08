@@ -226,35 +226,48 @@ func (c *Client) Read() {
 		} else {
 			var message = request.ChatMessageRequest{}
 			if err := json.Unmarshal(jsonMessage, &message); err != nil {
-				zlog.Error(err.Error())
+				zlog.Error("消息解析失败: " + err.Error())
+				_ = c.EnqueueDelivery(&MessageBack{Message: []byte("消息格式错误")})
+				continue
+			}
+			// 安全：强制发送者为当前连接用户，忽略客户端伪造的 send_id（防冒充他人发消息）
+			message.SendId = c.Uuid
+			// 安全：校验发送权限（U 需正常好友关系，G 需群有效成员），防越权向任意会话发送
+			if !CanSendTo(message.SendId, message.ReceiveId) {
+				zlog.Warn("越权发送拦截: " + message.SendId + " -> " + message.ReceiveId)
+				_ = c.EnqueueDelivery(&MessageBack{Message: []byte("发送失败：你与该用户/群不存在有效关系")})
+				continue
 			}
 			// 拉黑拦截：发送方与接收方任一方向存在拉黑关系即拒收（不持久化、不投递）。
 			// 覆盖三种消息模式（channel/hybrid/kafka）的统一拦截点。
-			if message.SendId != "" && message.ReceiveId != "" && IsBlocked(message.SendId, message.ReceiveId) {
+			if IsBlocked(message.SendId, message.ReceiveId) {
 				zlog.Warn("拉黑关系消息拦截: " + message.SendId + " -> " + message.ReceiveId)
-				if err := c.Conn.WriteMessage(websocket.TextMessage, []byte("消息发送失败：你已被对方拉黑或已拉黑对方")); err != nil {
-					zlog.Error(err.Error())
-				}
+				_ = c.EnqueueDelivery(&MessageBack{Message: []byte("消息发送失败：你已被对方拉黑或已拉黑对方")})
+				continue
+			}
+			// 使用修正后的 send_id 重新序列化后再进入路由
+			normalized, err := json.Marshal(message)
+			if err != nil {
+				zlog.Error("消息序列化失败: " + err.Error())
+				_ = c.EnqueueDelivery(&MessageBack{Message: []byte("消息发送失败，请稍后重试")})
 				continue
 			}
 			if messageMode == "channel" {
-				ChatServer.SendMessageToTransmit(jsonMessage)
+				ChatServer.SendMessageToTransmit(normalized)
 			} else if messageMode == "hybrid" {
 				// P1 改造：混合模式，通过背压检测器自动分流到 Kafka
-				if err := HybridChatRouter.SendMessage(jsonMessage); err != nil {
+				if err := HybridChatRouter.SendMessage(normalized); err != nil {
 					zlog.Error("混合路由发送失败: " + err.Error())
-					if err := c.Conn.WriteMessage(websocket.TextMessage, []byte("消息发送失败，请稍后重试")); err != nil {
-						zlog.Error(err.Error())
-					}
+					_ = c.EnqueueDelivery(&MessageBack{Message: []byte("消息发送失败，请稍后重试")})
 				}
 			} else {
 				if err := myKafka.KafkaService.ChatWriter.WriteMessages(ctx, kafka.Message{
 					Key:   []byte(strconv.Itoa(config.GetConfig().KafkaConfig.Partition)),
-					Value: jsonMessage,
+					Value: normalized,
 				}); err != nil {
 					zlog.Error(err.Error())
 				}
-				zlog.Info("已发送消息：" + string(jsonMessage))
+				zlog.Info("已发送消息：" + string(normalized))
 			}
 		}
 	}

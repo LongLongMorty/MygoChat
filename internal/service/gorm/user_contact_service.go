@@ -536,6 +536,8 @@ func (u *userContactService) PassContactApply(ownerId string, contactId string) 
 		if err := myredis.DelKeysWithPattern("contact_user_list_" + contactId); err != nil {
 			zlog.Error(err.Error())
 		}
+		// 好友关系建立：失效发送鉴权缓存，使其立即可发送消息
+		chat.InvalidateSendAuth(ownerId, contactId)
 		return "已添加该联系人", 0
 	} else {
 		// 群申请：事务中完成更新申请状态 → 加入成员 → 创建联系人 → 清理缓存

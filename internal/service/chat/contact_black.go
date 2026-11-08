@@ -62,6 +62,8 @@ func IsBlocked(sendId, receiveId string) bool {
 func InvalidateContactBlack(a, b string) {
 	_ = myredis.DelKeyIfExists(contactBlackKey(a, b))
 	_ = myredis.DelKeyIfExists(contactBlackKey(b, a))
+	// 拉黑/取消拉黑/删除好友都会改变"能否发送"，同步失效发送鉴权缓存
+	InvalidateSendAuth(a, b)
 }
 
 func contactBlackKey(a, b string) string {
