@@ -34,6 +34,7 @@ KamaChat 是基于 **Go + WebSocket + Kafka + Redis + MySQL** 的即时通信服
 
 | 文档 | 主题 | 说明 |
 | --- | --- | --- |
+| [interview-qa.md](interview-qa.md) | 面试高频问答（精炼） | 保序 / 群扇出 / Kafka 分流 / Redis 作用 / 跨实例顺序与不丢，含话术与追问 |
 | [项目问答记录.md](项目问答记录.md) | 面试问答（长文） | 结合代码讲解架构/数据库/Kafka/WebSocket 等；**时效性提示见文首** |
 
 ## 协作规范
